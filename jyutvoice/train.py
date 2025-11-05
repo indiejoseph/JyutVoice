@@ -37,6 +37,10 @@ def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     print(f"Instantiating trainer...")
     trainer: Trainer = cfg.get("trainer", Trainer(max_epochs=100))
 
+    # Attach logger to trainer if instantiated
+    if logger:
+        trainer.logger = logger if len(logger) > 1 else logger[0]
+
     object_dict = {
         "cfg": cfg,
         "datamodule": datamodule,

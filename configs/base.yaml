@@ -70,6 +70,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: 192
+  pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 1e-4
     weight_decay: 0.0
@@ -100,8 +101,19 @@ trainer: !new:lightning.Trainer
   accelerator: cuda
   devices: 1
   precision: bf16-mixed
-  max_epochs: 1
+  max_epochs: 50
   detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
   log_every_n_steps: 10
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
+
+# WandB Logging Configuration
+logger:
+  wandb:
+    _target_: lightning.pytorch.loggers.wandb.WandbLogger
+    name: jyutvoice-tts # Project name
+    project: jyutvoice-tts # WandB project name
+    entity: null # Set to your WandB team name if you have one
+    log_model: false # Set to true to log model checkpoints
+    prefix: ""
+    notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"

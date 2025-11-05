@@ -35,20 +35,26 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
     return callbacks
 
 
-def instantiate_loggers(logger_cfg: DictConfig) -> List[Logger]:
+def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     """Instantiates loggers from config.
 
-    :param logger_cfg: A DictConfig object containing logger configurations.
+    :param logger_cfg: A DictConfig or dict object containing logger configurations.
     :return: A list of instantiated loggers.
     """
-    logger: List[Logger] = []
+    logger: list[Logger] = []
 
     if not logger_cfg:
         log.warning("No logger configs found! Skipping...")
         return logger
 
+    # Convert dict to DictConfig if needed
+    if isinstance(logger_cfg, dict) and not isinstance(logger_cfg, DictConfig):
+        from omegaconf import OmegaConf
+
+        logger_cfg = OmegaConf.create(logger_cfg)
+
     if not isinstance(logger_cfg, DictConfig):
-        raise TypeError("Logger config must be a DictConfig!")
+        raise TypeError("Logger config must be a DictConfig or dict!")
 
     for _, lg_conf in logger_cfg.items():
         if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:

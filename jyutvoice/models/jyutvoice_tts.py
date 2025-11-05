@@ -25,6 +25,7 @@ class JyutVoiceTTS(BaseLightningClass):
         use_precomputed_durations=False,
         optimizer=None,
         scheduler=None,
+        pretrain_path=None,
     ):
         super().__init__()
 
@@ -39,10 +40,87 @@ class JyutVoiceTTS(BaseLightningClass):
         if freeze_decoder:
             self._freeze_decoder()
 
+        # Load pretrained weights if provided
+        if pretrain_path:
+            self.load_pretrain(pretrain_path)
+
     def _freeze_decoder(self):
         for param in self.decoder.parameters():
             param.requires_grad = False
         self.decoder.eval()
+
+    def load_pretrain(self, pretrain_path):
+        """
+        Load pretrained weights from a checkpoint file.
+
+        This method loads weights for transfer learning. It supports:
+        1. Loading full model state_dict (encoder + decoder + speaker embedding layer)
+        2. Partial loading with strict=False to handle missing keys gracefully
+        3. Logging of loaded and skipped weights for debugging
+
+        Args:
+            pretrain_path (str): Path to the pretrained checkpoint file (.pt)
+
+        Example:
+            >>> model = JyutVoiceTTS(...)
+            >>> model.load_pretrain('pretrained_models/pretrain.pt')
+        """
+        import os
+
+        if not os.path.exists(pretrain_path):
+            raise FileNotFoundError(f"Pretrain checkpoint not found: {pretrain_path}")
+
+        # Load the checkpoint
+        checkpoint = torch.load(pretrain_path, map_location=self.device)
+
+        # Handle both full checkpoints and state_dict-only checkpoints
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        else:
+            state_dict = checkpoint
+
+        # Load the state dict with strict=False to allow for some missing keys
+        # (e.g., keys that might be specific to training setup)
+        incompatible_keys = self.load_state_dict(state_dict, strict=False)
+
+        # Log information about loaded weights
+        if incompatible_keys.missing_keys:
+            print(
+                f"\n[Transfer Learning] ⚠️  Missing keys ({len(incompatible_keys.missing_keys)}):"
+            )
+            for key in incompatible_keys.missing_keys[:5]:  # Show first 5
+                print(f"   - {key}")
+            if len(incompatible_keys.missing_keys) > 5:
+                print(f"   ... and {len(incompatible_keys.missing_keys) - 5} more")
+
+        if incompatible_keys.unexpected_keys:
+            print(
+                f"\n[Transfer Learning] ℹ️  Unexpected keys ({len(incompatible_keys.unexpected_keys)}):"
+            )
+            for key in incompatible_keys.unexpected_keys[:5]:  # Show first 5
+                print(f"   - {key}")
+            if len(incompatible_keys.unexpected_keys) > 5:
+                print(f"   ... and {len(incompatible_keys.unexpected_keys) - 5} more")
+
+        # Summarize loaded weights
+        loaded_keys = set(state_dict.keys()) - set(incompatible_keys.unexpected_keys)
+        print(
+            f"\n✅ [Transfer Learning] Loaded {len(loaded_keys)} weights from: {pretrain_path}"
+        )
+
+        # Log key components
+        encoder_keys = sum(1 for k in loaded_keys if k.startswith("encoder"))
+        decoder_keys = sum(1 for k in loaded_keys if k.startswith("decoder"))
+        spk_keys = sum(1 for k in loaded_keys if k.startswith("spk_embed"))
+
+        if encoder_keys > 0:
+            print(f"   • Encoder: {encoder_keys} weights")
+        if decoder_keys > 0:
+            print(f"   • Decoder: {decoder_keys} weights")
+        if spk_keys > 0:
+            print(f"   • Speaker Embedding Layer: {spk_keys} weights")
+
+        return incompatible_keys
 
     @torch.inference_mode()
     def synthesise(
