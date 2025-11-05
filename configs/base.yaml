@@ -1,0 +1,107 @@
+# fixed params
+n_feats: 80
+p_dropout: 0.1
+filter_channels_dp: 256
+token_frame_rate: 25
+token_mel_ratio: 2
+# stream related params
+chunk_size: 25 # streaming inference chunk size, in token
+num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+
+# audio processing params
+sample_rate: 24000
+hop_length: 480
+win_length: 1920
+n_fft: 1920
+f_min: 0
+f_max: 8000
+add_blank: true
+
+tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
+  encoder: !new:jyutvoice.models.text_encoder.TextEncoder
+    encoder_type: RoPE Encoder
+    encoder_params: !new:omegaconf.DictConfig
+      content:
+        n_feats: !ref <n_feats>
+        n_channels: 192
+        filter_channels: 768
+        filter_channels_dp: !ref <filter_channels_dp>
+        n_heads: 2
+        n_layers: 6
+        kernel_size: 3
+        p_dropout: !ref <p_dropout>
+        prenet: true
+
+    duration_predictor_params: !new:omegaconf.DictConfig
+      content:
+        filter_channels_dp: !ref <filter_channels_dp>
+        kernel_size: 3
+        p_dropout: !ref <p_dropout>
+
+    n_vocab: 81
+    n_lang: 3 # Cantonese, Mandarin, English
+    n_tone: 7 # pad + 6 tones
+
+  decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
+    in_channels: 240
+    n_spks: 1
+    spk_emb_dim: 80
+    cfm_params: !new:omegaconf.DictConfig
+      content:
+        sigma_min: 1e-06
+        solver: "euler"
+        t_scheduler: "cosine"
+        training_cfg_rate: 0.2
+        inference_cfg_rate: 0.7
+        reg_loss_type: "l1"
+    estimator: !new:jyutvoice.flow.decoder.CausalConditionalDecoder
+      in_channels: 320
+      out_channels: 80
+      channels: [256]
+      dropout: 0.0
+      attention_head_dim: 64
+      n_blocks: 4
+      num_mid_blocks: 12
+      num_heads: 8
+      act_fn: "gelu"
+      static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
+      num_decoding_left_chunks: !ref <num_decoding_left_chunks>
+
+  freeze_decoder: true
+  output_size: 80
+  spk_embed_dim: 192
+  optimizer: !name:torch.optim.AdamW
+    lr: 1e-4
+    weight_decay: 0.0
+  scheduler: null
+
+data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
+  name: jyutvoice_tts
+  dataset_path: tmp/dummy_dataset
+  speaker_embedding_model_path: pretrained_models/campplus.onnx
+  flow_encoder_path: pretrained_models/flow_encoder.pt
+  speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
+  batch_size: 4
+  num_workers: 0
+  pin_memory: false
+  dataset_valid_ratio: 0.1
+  seed: 42
+  load_durations: false
+  add_blank: !ref <add_blank>
+  n_fft: !ref <n_fft>
+  n_feats: !ref <n_feats>
+  sample_rate: !ref <sample_rate>
+  hop_length: !ref <hop_length>
+  win_length: !ref <win_length>
+  f_min: !ref <f_min>
+  f_max: !ref <f_max>
+
+trainer: !new:lightning.Trainer
+  accelerator: cuda
+  devices: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0 # have to be 0 for testing

@@ -1,0 +1,7 @@
+tmp
+*.pyc
+__pycache__/
+*.ipynb
+.cache
+lightning_logs
+pretrained_models/*
