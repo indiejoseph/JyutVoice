@@ -50,27 +50,53 @@ def is_chinese(char: str) -> bool:
 
 
 def word_seg(row):
-    lang = row["lang"]
-    text = row["text"]
+    """
+    Perform word segmentation and validate text.
+
+    Returns:
+        dict: With keys 'text', 'valid'
+              'text': Segmented text with spaces between words
+              'valid': Boolean indicating if text passed validation
+    """
+    lang = row.get("lang")
+    text = row.get("text", "")
+
+    # Validate inputs exist
+    if not lang or not text:
+        return {
+            "text": text,
+            "valid": False,
+        }
 
     try:
         if lang != "en":
+            # Chinese text: apply word segmentation
             seg = ws_model.cut(text, mode="coarse")
             text = " ".join(seg)
 
-            # only accept Chinese characters, spaces and basic punctuation
-            valid = all(is_chinese(c) or c.isspace() or c in "。，、！？" for c in text)
+            # Only accept Chinese characters, spaces and basic punctuation
+            valid = all(
+                is_chinese(c) or c.isspace() or c in "。，、！？；：、…—·「」『』（）"
+                for c in text
+            )
 
             return {
                 "text": text,
                 "valid": valid,
             }
-        else:  # English
-            # only accept alphabetic characters, spaces and basic punctuation
-            if not all(c.isalpha() or c.isspace() or c in ".,!?" for c in text):
-                return {"valid": False}
-    except (ValueError, KeyError, TypeError) as e:
-        return {"valid": False}
+        else:
+            # English text: just validate
+            valid = all(c.isalpha() or c.isspace() or c in ".,!?;:'-" for c in text)
+            return {
+                "text": text,
+                "valid": valid,
+            }
+    except (ValueError, KeyError, TypeError, Exception) as e:
+        # If any error occurs during processing, mark as invalid
+        return {
+            "text": text,
+            "valid": False,
+        }
 
     return {
         "text": text,
@@ -141,14 +167,27 @@ if __name__ == "__main__":
             exit(1)
 
     print(f"Processing dataset with {len(dataset)} samples...")
+    initial_count = len(dataset)
+
+    # Apply word segmentation
     dataset = dataset.map(word_seg, num_proc=4)
+    print(f"✅ Word segmentation complete")
 
     # Filter valid samples
+    print(f"🔍 Filtering invalid samples...")
     dataset = dataset.filter(lambda x: x["valid"])
-    print(f"✅ Kept {len(dataset)} valid samples after filtering")
+    filtered_count = len(dataset)
+    removed_count = initial_count - filtered_count
+
+    print(f"✅ Filtering complete:")
+    print(f"   Original samples: {initial_count}")
+    print(f"   Valid samples: {filtered_count}")
+    print(f"   Removed invalid: {removed_count}")
+    print(f"   Retention rate: {100 * filtered_count / initial_count:.1f}%")
 
     # Remove the valid column before saving
     dataset = dataset.remove_columns(["valid"])
+    print(f"✅ Removed 'valid' column")
 
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
