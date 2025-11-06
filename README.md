@@ -44,11 +44,6 @@ Monitor on WandB: `https://wandb.ai/[your-username]/jyutvoice-tts`
 
 ### Prepare Your Dataset
 
-**Create sample dataset files:**
-```bash
-python scripts/create_sample_dataset.py
-```
-
 **Dataset format (JSON or CSV):**
 ```json
 {"text": "你好世界", "lang": "zh", "audio": "speaker_001/001.wav"}

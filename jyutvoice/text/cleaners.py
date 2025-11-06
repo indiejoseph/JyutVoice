@@ -83,7 +83,7 @@ def text_normalize(text: str, lang="yue") -> str:
     return text
 
 
-def clean_text(text: str, phoneme=None, lang: str = "yue", padding=False):
+def clean_text(text: str, lang: str = "yue", phoneme=None, padding=True):
     norm_text = " ".join([text_normalize(w, lang=lang) for w in text.split()])
     g2p = None
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     text = "佢 邊係 想 辭工 吖 ， 跳下 草裙舞 想 加 人工 之嘛 。"
     jyutping = "keoi5 bin1 hai6 soeng2 ci4 gung1 aa1 , tiu3 haa6 cou2 kwan4 mou5 soeng2 gaa1 jan4 gung1 zi1 maa3 ."
     norm_text, phones, tones, word_pos, syllable_pos = clean_text(
-        text, jyutping, lang="yue"
+        text, lang="yue", phoneme=jyutping
     )
     print("Original:", text)
     print("Normalized:", norm_text)

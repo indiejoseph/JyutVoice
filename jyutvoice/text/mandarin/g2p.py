@@ -6,13 +6,14 @@ from pypinyin.style.finals import FinalsConverter
 from pypinyin.style.initials import convert as initials_convert
 from jyutvoice.text.symbols import punctuations
 
+
 finals_converter = FinalsConverter()
 
 
-def text_to_pinyin(text: str) -> List[tuple]:
+def text_to_pinyin(word: str) -> List[tuple]:
     """Convert Chinese text to pinyin initials and finals."""
-    initials_list = pypinyin.pinyin(text, style=Style.INITIALS, heteronym=False)
-    finals_list = pypinyin.pinyin(text, style=Style.FINALS_TONE3, heteronym=False)
+    initials_list = pypinyin.pinyin(word, style=Style.INITIALS)
+    finals_list = pypinyin.pinyin(word, style=Style.FINALS_TONE3, strict=False)
     initials_flat = [item[0] for item in initials_list]
     finals_flat = [item[0] for item in finals_list]
     return list(zip(initials_flat, finals_flat))
@@ -22,8 +23,8 @@ def split_pinyin_syllable(syllable: str) -> tuple:
     """Split a pinyin syllable into its initial and final components."""
     if re.match(r"^[a-zA-Z]+[0-9]$", syllable) is None:
         return ("", syllable)  # Treat as punctuation or invalid syllable
-    initial = initials_convert(syllable, strict=False)
-    final = finals_converter.to_finals_tone3(syllable, strict=False)
+    initial = initials_convert(syllable, strict=True)
+    final = finals_converter.to_finals_tone3(syllable, strict=True)
     return initial, final
 
 

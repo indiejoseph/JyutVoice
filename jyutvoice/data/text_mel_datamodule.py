@@ -1,3 +1,4 @@
+import os
 import random
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -9,11 +10,12 @@ import whisper
 from lightning import LightningDataModule
 from torch.utils.data.dataloader import DataLoader
 import onnxruntime
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from jyutvoice.utils.audio import mel_spectrogram
-from jyutvoice.utils.model import fix_len_compatibility, normalize
+from jyutvoice.utils.model import fix_len_compatibility
 from jyutvoice.utils.utils import intersperse
 from jyutvoice.utils.mask import make_pad_mask
+from jyutvoice.text import text_to_sequence
 from jyutvoice.transformer.upsample_encoder import UpsampleConformerEncoder
 
 
@@ -63,13 +65,7 @@ def load_speech_tokenizer(speech_tokenizer_path: str):
     session = onnxruntime.InferenceSession(
         speech_tokenizer_path,
         sess_options=option,
-        providers=[
-            (
-                "CUDAExecutionProvider"
-                if torch.cuda.is_available()
-                else "CPUExecutionProvider"
-            )
-        ],
+        providers=["CPUExecutionProvider"],
     )
     return session
 
@@ -247,6 +243,7 @@ class TextMelDataModule(LightningDataModule):
         win_length,
         f_min,
         f_max,
+        token_mel_ratio,
         seed,
         load_durations,
         flow_encoder_path,
@@ -279,7 +276,10 @@ class TextMelDataModule(LightningDataModule):
         careful not to execute things like random split twice!
         """
         # load and split datasets only if not loaded already
-        ds = load_dataset(self.hparams.dataset_path, split="train")
+        if os.path.exists(self.hparams.dataset_path):
+            ds = load_from_disk(self.hparams.dataset_path)
+        else:
+            ds = load_dataset(self.hparams.dataset_path, split="train")
         ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio)
 
         speaker_embedding_onnx_session = load_spk_embedding(
@@ -297,6 +297,7 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
+                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -316,6 +317,7 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
+                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -374,6 +376,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         win_length=1024,
         f_min=0.0,
         f_max=8000,
+        token_mel_ratio=0,
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
@@ -390,6 +393,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.win_length = win_length
         self.f_min = f_min
         self.f_max = f_max
+        self.token_mel_ratio = token_mel_ratio
         self.load_durations = load_durations
         self.speaker_embedding_onnx_session = speaker_embedding_onnx_session
         self.flow_encoder = flow_encoder
@@ -405,21 +409,41 @@ class TextMelDataset(torch.utils.data.Dataset):
         text = row["text"]
         lang = row["lang"]
         phone = row["phone"]
-        tone = row["tones"]
-        word_pos = row["word_pos"]
-        syllable_pos = row["syllable_pos"]
         audio = row["audio"]["array"]
-        audio_path = row["audio"]["path"]
-        sr = row["audio"]["sampling_rate"]
-        text, lang, phone, tone, word_pos, syllable_pos = self.get_text(
-            text,
-            lang,
-            phone,
-            tone,
-            word_pos,
-            syllable_pos,
-            add_blank=self.add_blank,
+        audio_path = (
+            row["audio"]["path"]
+            if row["audio"]["path"] is not None
+            else str(abs(hash(text))) + ".wav"
         )
+        sr = row["audio"]["sampling_rate"]
+
+        # Check if lang/phone/tones are already pre-processed as integers (from dataset)
+        # vs strings (need to be processed)
+        if isinstance(lang, list) and len(lang) > 0 and isinstance(lang[0], int):
+            # Already pre-computed - convert directly to tensors
+            lang_ids = torch.LongTensor(lang)
+            phone_ids = torch.LongTensor(phone) if isinstance(phone, list) else phone
+            tone = torch.LongTensor(row.get("tones", []))
+            word_pos = torch.LongTensor(row.get("word_pos", []))
+            syllable_pos = torch.LongTensor(row.get("syllable_pos", []))
+        else:
+            # Need to process text
+            text_result = self.get_text(
+                text,
+                lang,
+                phone,
+                add_blank=self.add_blank,
+            )
+
+            # Skip samples with empty/invalid phoneme sequences
+            if text_result is None:
+                return None
+
+            text, lang_ids, phone_ids, tone, word_pos, syllable_pos = text_result
+
+        if audio is None:
+            raise ValueError(f"Audio data is None for {audio_path}")
+
         # Handle both list and numpy array formats from HuggingFace datasets
         if isinstance(audio, list):
             audio = np.array(audio, dtype=np.float32)
@@ -471,13 +495,22 @@ class TextMelDataset(torch.utils.data.Dataset):
                 torch.save(decoder_h.squeeze(0), decoder_h_path)
                 decoder_h = decoder_h.squeeze(0)  # Remove batch dim -> (token_len, 512)
 
+        if self.token_mel_ratio != 0:
+            decoder_h_len = decoder_h.shape[0]
+            token_len = int(min(mel.shape[1] / self.token_mel_ratio, decoder_h_len))
+            mel_len = self.token_mel_ratio * token_len
+            mel = mel[:, :mel_len]
+
+            if mel_len != decoder_h_len:
+                decoder_h = decoder_h[:mel_len, :]
+
         return {
-            "x": phone,
+            "x": phone_ids,
             "y": mel,
             "filepath": audio_path,
             "x_text": text,
             "durations": durations,
-            "lang": lang,
+            "lang": lang_ids,
             "tone": tone,
             "word_pos": word_pos,
             "syllable_pos": syllable_pos,
@@ -525,28 +558,48 @@ class TextMelDataset(torch.utils.data.Dataset):
         self,
         text,
         lang,
-        phone,
-        tones,
-        word_pos,
-        syllable_pos,
+        phone=None,
         add_blank=False,
     ):
-        if add_blank:
-            phone = intersperse(phone, 0)
-            tones = intersperse(tones, 0)
-            word_pos = intersperse(word_pos, 0)
-            syllable_pos = intersperse(syllable_pos, 0)
-            lang = intersperse(lang, 0)
-        phone = torch.LongTensor(phone)
-        lang = torch.LongTensor(lang)
-        tone = torch.LongTensor(tones)
-        word_pos = torch.LongTensor(word_pos)
-        syllable_pos = torch.LongTensor(syllable_pos)
+        try:
+            phone_ids, tone_ids, word_pos, syllable_pos, lang_ids = text_to_sequence(
+                text, lang, phone
+            )
 
-        return text, lang, phone, tone, word_pos, syllable_pos
+            if add_blank:
+                phone_ids = intersperse(phone_ids, 0)
+                tone_ids = intersperse(tone_ids, 0)
+                word_pos = intersperse(word_pos, 0)
+                syllable_pos = intersperse(syllable_pos, 0)
+                lang_ids = intersperse(lang_ids, 0)
+            phone_ids = torch.LongTensor(phone_ids)
+            lang_ids = torch.LongTensor(lang_ids)
+            tone = torch.LongTensor(tone_ids)
+            word_pos = torch.LongTensor(word_pos)
+            syllable_pos = torch.LongTensor(syllable_pos)
+
+            return text, lang_ids, phone_ids, tone, word_pos, syllable_pos
+        except Exception as e:
+            raise ValueError(
+                f"Error processing text: {text} with phone: {phone}. Exception: {str(e)}"
+            ) from e
 
     def __getitem__(self, index):
         datapoint = self.get_datapoint(self.dataset[index])
+        # If datapoint is None (invalid/empty phoneme), try next samples
+        attempts = 0
+        while datapoint is None and attempts < 10:
+            index = (index + 1) % len(self.dataset)
+            datapoint = self.get_datapoint(self.dataset[index])
+            attempts += 1
+
+        if datapoint is None:
+            # Fallback: return first valid sample
+            for i in range(len(self.dataset)):
+                datapoint = self.get_datapoint(self.dataset[i])
+                if datapoint is not None:
+                    break
+
         return datapoint
 
     def __len__(self):
@@ -559,7 +612,6 @@ class TextMelBatchCollate:
         y_max_length = max(
             [item["y"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
         x_max_length = max(
             [item["x"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
@@ -570,7 +622,6 @@ class TextMelBatchCollate:
         decoder_h_dim = None
         if has_decoder_h:
             decoder_h_dim = batch[0]["decoder_h"].shape[-1]
-            decoder_h_max_length = max([item["decoder_h"].shape[0] for item in batch])
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
         x = torch.zeros((B, x_max_length), dtype=torch.long)
@@ -583,10 +634,10 @@ class TextMelBatchCollate:
         decoder_h = None
         if has_decoder_h:
             decoder_h = torch.zeros(
-                (B, decoder_h_max_length, decoder_h_dim), dtype=torch.float32
+                (B, y_max_length, decoder_h_dim), dtype=torch.float32
             )
 
-        y_lengths, x_lengths = [], []
+        y_lengths, x_lengths, decoder_h_lengths = [], [], []
         filepaths, x_texts = [], []
         for i, item in enumerate(batch):
             y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_ = (
@@ -611,6 +662,7 @@ class TextMelBatchCollate:
             if has_decoder_h and item.get("decoder_h") is not None:
                 decoder_h_ = item["decoder_h"]
                 decoder_h[i, : decoder_h_.shape[0]] = decoder_h_
+                decoder_h_lengths.append(decoder_h_.shape[0])
             filepaths.append(item["filepath"])
             x_texts.append(item["x_text"])
             if item["durations"] is not None:
@@ -636,5 +688,8 @@ class TextMelBatchCollate:
 
         if has_decoder_h:
             batch_dict["decoder_h"] = decoder_h
+            batch_dict["decoder_h_lengths"] = torch.tensor(
+                decoder_h_lengths, dtype=torch.long
+            )
 
         return batch_dict

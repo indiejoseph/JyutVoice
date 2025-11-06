@@ -17,6 +17,30 @@ f_min: 0
 f_max: 8000
 add_blank: true
 
+hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
+  in_channels: 80
+  base_channels: 512
+  nb_harmonics: 8
+  sampling_rate: !ref <sample_rate>
+  nsf_alpha: 0.1
+  nsf_sigma: 0.003
+  nsf_voiced_threshold: 10
+  upsample_rates: [8, 5, 3]
+  upsample_kernel_sizes: [16, 11, 7]
+  istft_params:
+    n_fft: 16
+    hop_len: 4
+  resblock_kernel_sizes: [3, 7, 11]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  source_resblock_kernel_sizes: [7, 7, 11]
+  source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  lrelu_slope: 0.1
+  audio_limit: 0.99
+  f0_predictor: !new:jyutvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+    num_class: 1
+    in_channels: 80
+    cond_channels: 512
+
 tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   encoder: !new:jyutvoice.models.text_encoder.TextEncoder
     encoder_type: RoPE Encoder
@@ -38,7 +62,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
         kernel_size: 3
         p_dropout: !ref <p_dropout>
 
-    n_vocab: 81
+    n_vocab: 97
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
 
@@ -72,19 +96,20 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   spk_embed_dim: 192
   pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
-    lr: 1e-4
+    lr: 2e-4
     weight_decay: 0.0
   scheduler: null
+  warmup_steps: 100 # Number of warmup steps for learning rate
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
-  dataset_path: tmp/dummy_dataset
+  dataset_path: tmp/dummy_dataset_resaved
   speaker_embedding_model_path: pretrained_models/campplus.onnx
   flow_encoder_path: pretrained_models/flow_encoder.pt
   speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
   batch_size: 4
   num_workers: 0
-  pin_memory: false
+  pin_memory: true
   dataset_valid_ratio: 0.1
   seed: 42
   load_durations: false
@@ -96,14 +121,15 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
+  token_mel_ratio: !ref <token_mel_ratio>
 
 trainer: !new:lightning.Trainer
-  accelerator: cuda
+  accelerator: auto
   devices: 1
   precision: bf16-mixed
   max_epochs: 50
   detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
-  log_every_n_steps: 10
+  log_every_n_steps: 1
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
 

@@ -1,13 +1,12 @@
+import os
 import math
 import datetime as dt
 import random
 import torch
 from torch.nn import functional as F
-from jyutvoice.utils.mask import make_pad_mask
 from jyutvoice.utils.model import (
     sequence_mask,
     generate_path,
-    fix_len_compatibility,
     duration_loss,
 )
 import jyutvoice.utils.monotonic_align as monotonic_align
@@ -26,6 +25,7 @@ class JyutVoiceTTS(BaseLightningClass):
         optimizer=None,
         scheduler=None,
         pretrain_path=None,
+        warmup_steps=1000,
     ):
         super().__init__()
 
@@ -47,6 +47,8 @@ class JyutVoiceTTS(BaseLightningClass):
     def _freeze_decoder(self):
         for param in self.decoder.parameters():
             param.requires_grad = False
+        for param in self.spk_embed_affine_layer.parameters():
+            param.requires_grad = False
         self.decoder.eval()
 
     def load_pretrain(self, pretrain_path):
@@ -65,13 +67,11 @@ class JyutVoiceTTS(BaseLightningClass):
             >>> model = JyutVoiceTTS(...)
             >>> model.load_pretrain('pretrained_models/pretrain.pt')
         """
-        import os
-
         if not os.path.exists(pretrain_path):
             raise FileNotFoundError(f"Pretrain checkpoint not found: {pretrain_path}")
 
         # Load the checkpoint
-        checkpoint = torch.load(pretrain_path, map_location=self.device)
+        checkpoint = torch.load(pretrain_path, map_location="cpu")
 
         # Handle both full checkpoints and state_dict-only checkpoints
         if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -82,43 +82,6 @@ class JyutVoiceTTS(BaseLightningClass):
         # Load the state dict with strict=False to allow for some missing keys
         # (e.g., keys that might be specific to training setup)
         incompatible_keys = self.load_state_dict(state_dict, strict=False)
-
-        # Log information about loaded weights
-        if incompatible_keys.missing_keys:
-            print(
-                f"\n[Transfer Learning] ⚠️  Missing keys ({len(incompatible_keys.missing_keys)}):"
-            )
-            for key in incompatible_keys.missing_keys[:5]:  # Show first 5
-                print(f"   - {key}")
-            if len(incompatible_keys.missing_keys) > 5:
-                print(f"   ... and {len(incompatible_keys.missing_keys) - 5} more")
-
-        if incompatible_keys.unexpected_keys:
-            print(
-                f"\n[Transfer Learning] ℹ️  Unexpected keys ({len(incompatible_keys.unexpected_keys)}):"
-            )
-            for key in incompatible_keys.unexpected_keys[:5]:  # Show first 5
-                print(f"   - {key}")
-            if len(incompatible_keys.unexpected_keys) > 5:
-                print(f"   ... and {len(incompatible_keys.unexpected_keys) - 5} more")
-
-        # Summarize loaded weights
-        loaded_keys = set(state_dict.keys()) - set(incompatible_keys.unexpected_keys)
-        print(
-            f"\n✅ [Transfer Learning] Loaded {len(loaded_keys)} weights from: {pretrain_path}"
-        )
-
-        # Log key components
-        encoder_keys = sum(1 for k in loaded_keys if k.startswith("encoder"))
-        decoder_keys = sum(1 for k in loaded_keys if k.startswith("decoder"))
-        spk_keys = sum(1 for k in loaded_keys if k.startswith("spk_embed"))
-
-        if encoder_keys > 0:
-            print(f"   • Encoder: {encoder_keys} weights")
-        if decoder_keys > 0:
-            print(f"   • Decoder: {decoder_keys} weights")
-        if spk_keys > 0:
-            print(f"   • Speaker Embedding Layer: {spk_keys} weights")
 
         return incompatible_keys
 
@@ -190,10 +153,9 @@ class JyutVoiceTTS(BaseLightningClass):
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_max_length = y_lengths.max()
-        y_max_length_ = fix_len_compatibility(y_max_length)
 
         # Using obtained durations `w` construct alignment map `attn`
-        y_mask = sequence_mask(y_lengths, y_max_length_).unsqueeze(1).to(x_mask.dtype)
+        y_mask = sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask.dtype)
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
         attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
 
@@ -221,26 +183,27 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Initialize conditioning tensor: (1, n_feats, mel_len)
         # During inference, we don't have prompt/prefix, so use zeros
-        cond = torch.zeros_like(mu_y[:, :, :y_max_length])
+        cond = torch.zeros_like(mu_y)
 
         # Decoder forward pass
         decoder_outputs, _ = self.decoder(
-            mu=mu_y[:, :, :y_max_length],
-            mask=y_mask[:, :, :y_max_length],
+            mu=mu_y,
+            mask=y_mask,
             spks=spk_embed,
             cond=cond,
             n_timesteps=n_timesteps,
             temperature=temperature,
             streaming=False,
         )
+        decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
         t = (dt.datetime.now() - t).total_seconds()
-        rtf = t * 24000 / (decoder_outputs.shape[-1] * 256)
+        rtf = t * 24000 / (decoder_outputs.shape[-1] * 480)
 
         return {
             "encoder_outputs": encoder_outputs,
             "decoder_outputs": decoder_outputs,
-            "attn": attn[:, :, :y_max_length],
+            "attn": attn,
             "mel": decoder_outputs,
             "mel_lengths": y_lengths,
             "rtf": rtf,
@@ -258,6 +221,7 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
+        decoder_h_lengths,
         durations=None,
     ):
         """
@@ -276,7 +240,8 @@ class JyutVoiceTTS(BaseLightningClass):
             word_pos: Word position information (B, T_text)
             syllable_pos: Syllable position information (B, T_text)
             spk_embed,: Speaker embedding (B, spk_embed_dim)
-            decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_text, n_feats)
+            decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_mel, n_feats)
+            decoder_h_lengths: Lengths of decoder_h sequences (B,)
             durations: Optional ground truth durations for teacher forcing
         """
 
@@ -292,28 +257,23 @@ class JyutVoiceTTS(BaseLightningClass):
         if self.use_precomputed_durations:
             attn = generate_path(durations.squeeze(1), attn_mask.squeeze(1))
         else:
-            # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
+            # Use MAS to find most likely alignment `attn` between text tokens and decoder_h
+            # The text encoder is trained to map text → decoder_h space, so align to decoder_h
             with torch.no_grad():
                 const = -0.5 * math.log(2 * math.pi) * self.n_feats
                 factor = -0.5 * torch.ones(
                     mu_x.shape, dtype=mu_x.dtype, device=mu_x.device
                 )
-                y_square = torch.matmul(factor.transpose(1, 2), (y**2))
-                y_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), y)
+                # Use decoder_h (flow encoder hidden states) for alignment computation
+                # decoder_h: (batch, T_text, n_feats) → transpose to (batch, n_feats, T_text)
+                h = decoder_h.transpose(1, 2)
+                h_square = torch.matmul(factor.transpose(1, 2), (h**2))
+                h_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), h)
                 mu_square = torch.sum(factor * (mu_x**2), 1).unsqueeze(-1)
-                log_prior = y_square - y_mu_double + mu_square + const
+                log_prior = h_square - h_mu_double + mu_square + const
 
                 attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
-                attn = attn.detach()  # b, t_text, T_mel
-
-        # Align encoded text with mel-spectrogram and get mu_y segment
-        # attn: (batch, 1, text_len, mel_len) → squeeze → (batch, text_len, mel_len)
-        # mu_x: (batch, n_feats, text_len)
-        # Compute: (batch, mel_len, text_len) @ (batch, text_len, n_feats) → (batch, mel_len, n_feats)
-        # Then transpose to (batch, n_feats, mel_len)
-        mu_y = torch.matmul(
-            attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2)
-        ).transpose(1, 2)
+                attn = attn.detach()  # b, t_text, T_text (decoder_h_len)
 
         # Compute loss between predicted log-scaled durations and those obtained from MAS
         # refered to as prior loss in the paper
@@ -335,44 +295,36 @@ class JyutVoiceTTS(BaseLightningClass):
             index = random.randint(0, int(0.3 * j))
             conds[i, :, :index] = y[i, :, :index]
 
-        # Slice y, conds, and mu_y to actual lengths (remove padding)
-        # mu_y from MAS alignment has the correct shape, but y is padded
-        mu_y_len = mu_y.shape[-1]
-        y_slice = y[:, :, :mu_y_len]
-        conds_slice = conds[:, :, :mu_y_len]
-
-        # Recompute mask for the sliced length
-        mask = sequence_mask(y_lengths, mu_y_len).unsqueeze(1).to(mu_y.dtype)
+        # Align encoded text with mel-spectrogram and get mu_y segment
+        mu_y = torch.matmul(attn.transpose(1, 2), mu_x.transpose(1, 2))
+        mu_y = mu_y.transpose(1, 2)
 
         # Compute loss of the decoder
         diff_loss, _ = self.decoder.compute_loss(
-            x1=y_slice,
-            mask=mask,
+            x1=y,
+            mask=y_mask,
             mu=mu_y,
             spks=spk_embed,
-            cond=conds_slice,
+            cond=conds,
             streaming=streaming,
         )
 
         # Compute the prior loss: MSE between aligned encoder representations
         # The prior loss trains the text encoder to match the frozen flow encoder representations
-        # Both should be compared at the same mel-spectrogram time steps (after alignment)
-        #
-        # mu_y: (batch, 80, mel_len) - text encoder output aligned via MAS
-        # decoder_h: (batch, mel_len, 80) - frozen flow encoder output
-        #
-        # Slice decoder_h to actual mel length (remove padding)
-        decoder_h_slice = decoder_h[:, :mu_y_len, :]  # (batch, mu_y_len, 80)
+        decoder_max_length = decoder_h.shape[1]
+        decoder_h_mask = (
+            sequence_mask(decoder_h_lengths, decoder_max_length)
+            .unsqueeze(1)
+            .to(mu_y.dtype)
+        )
+        mu_y_t = mu_y.transpose(1, 2)  # (B, T_mel, n_feats)
 
-        # Transpose mu_y to match decoder_h shape for comparison
-        mu_y_t = mu_y.transpose(1, 2)  # (batch, mel_len, 80)
-
-        # Compute prior loss comparing aligned mel-frame representations
+        # Compute prior loss comparing aligned representations
         prior_loss = torch.sum(
             0.5
-            * ((decoder_h_slice - mu_y_t) ** 2 + math.log(2 * math.pi))
-            * mask.squeeze(1).unsqueeze(-1)
+            * ((decoder_h - mu_y_t) ** 2 + math.log(2 * math.pi))
+            * decoder_h_mask.squeeze(1).unsqueeze(-1)
         )
-        prior_loss = prior_loss / (torch.sum(mask) * self.n_feats)
+        prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 
         return dur_loss, prior_loss, diff_loss, attn

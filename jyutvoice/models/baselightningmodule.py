@@ -10,6 +10,7 @@ from typing import Any, Dict
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
+from torch.optim.lr_scheduler import LambdaLR, SequentialLR
 
 from jyutvoice import utils
 from jyutvoice.utils.utils import plot_tensor
@@ -20,6 +21,20 @@ log = utils.get_pylogger(__name__)
 class BaseLightningClass(LightningModule, ABC):
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
+
+        # Get warmup steps from config (default to 1000 if not specified)
+        warmup_steps = getattr(self.hparams, "warmup_steps", 1000)
+
+        # Define warmup function
+        def warmup_lambda(current_step: int):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            return 1.0
+
+        # Create warmup scheduler
+        warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda)
+
+        # Check if main scheduler is configured
         if self.hparams.scheduler not in (None, {}):
             scheduler_args = {}
             # Manage last epoch for exponential schedulers
@@ -33,19 +48,36 @@ class BaseLightningClass(LightningModule, ABC):
                     current_epoch = -1
 
             scheduler_args.update({"optimizer": optimizer})
-            scheduler = self.hparams.scheduler.scheduler(**scheduler_args)
-            scheduler.last_epoch = current_epoch
+            main_scheduler = self.hparams.scheduler.scheduler(**scheduler_args)
+            main_scheduler.last_epoch = current_epoch
+
+            # Combine warmup + main scheduler
+            scheduler = SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, main_scheduler],
+                milestones=[warmup_steps],
+            )
+
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": self.hparams.scheduler.lightning_args.interval,
-                    "frequency": self.hparams.scheduler.lightning_args.frequency,
+                    "interval": "step",  # Update LR every step
+                    "frequency": 1,
                     "name": "learning_rate",
                 },
             }
-
-        return {"optimizer": optimizer}
+        else:
+            # Only warmup scheduler
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": warmup_scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "learning_rate",
+                },
+            }
 
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]
@@ -58,6 +90,7 @@ class BaseLightningClass(LightningModule, ABC):
         )
         spk_embed = batch["spk_embed"]
         decoder_h = batch["decoder_h"]
+        decoder_h_lengths = batch["decoder_h_lengths"]
 
         dur_loss, prior_loss, diff_loss, *_ = self(
             x=x,
@@ -70,6 +103,7 @@ class BaseLightningClass(LightningModule, ABC):
             syllable_pos=syllable_pos,
             spk_embed=spk_embed,
             decoder_h=decoder_h,
+            decoder_h_lengths=decoder_h_lengths,
             durations=batch.get("durations", None),
         )
         return {
@@ -85,6 +119,18 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
+
+        # Log current learning rate
+        lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+        self.log(
+            "lr",
+            lr,
+            on_step=True,
+            prog_bar=False,
+            logger=True,
+            sync_dist=True,
+        )
+
         self.log(
             "step",
             float(self.global_step),
@@ -119,7 +165,10 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
         )
 
-        total_loss = sum(loss_dict.values())
+        # total_loss = sum(loss_dict.values())
+        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
+            loss_dict["diff_loss"] * 0.2
+        )
         self.log(
             "loss/train",
             total_loss,
@@ -159,7 +208,10 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
         )
 
-        total_loss = sum(loss_dict.values())
+        # total_loss = sum(loss_dict.values())
+        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
+            loss_dict["diff_loss"] * 0.2
+        )
         self.log(
             "loss/val",
             total_loss,
@@ -179,12 +231,23 @@ class BaseLightningClass(LightningModule, ABC):
                 log.debug("Plotting original samples")
                 for i in range(2):
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
-                    self.logger.experiment.add_image(
-                        f"original/{i}",
-                        plot_tensor(y.squeeze().cpu()),
-                        self.current_epoch,
-                        dataformats="HWC",
-                    )
+                    image = plot_tensor(y.squeeze().cpu())
+                    # Check if using wandb logger
+                    if hasattr(self.logger.experiment, "log"):
+                        import wandb
+
+                        self.logger.experiment.log(
+                            {f"original/{i}": wandb.Image(image)},
+                            step=self.current_epoch,
+                        )
+                    else:
+                        # Fallback to tensorboard API
+                        self.logger.experiment.add_image(
+                            f"original/{i}",
+                            image,
+                            self.current_epoch,
+                            dataformats="HWC",
+                        )
 
             log.debug("Synthesising...")
             for i in range(2):
@@ -211,24 +274,57 @@ class BaseLightningClass(LightningModule, ABC):
                 )
                 y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                 attn = output["attn"]
-                self.logger.experiment.add_image(
-                    f"generated_enc/{i}",
-                    plot_tensor(y_enc.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"generated_dec/{i}",
-                    plot_tensor(y_dec.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
-                self.logger.experiment.add_image(
-                    f"alignment/{i}",
-                    plot_tensor(attn.squeeze().cpu()),
-                    self.current_epoch,
-                    dataformats="HWC",
-                )
+
+                # Log generated encoder outputs
+                image_enc = plot_tensor(y_enc.squeeze().cpu())
+                if hasattr(self.logger.experiment, "log"):
+                    import wandb
+
+                    self.logger.experiment.log(
+                        {f"generated_enc/{i}": wandb.Image(image_enc)},
+                        step=self.current_epoch,
+                    )
+                else:
+                    self.logger.experiment.add_image(
+                        f"generated_enc/{i}",
+                        image_enc,
+                        self.current_epoch,
+                        dataformats="HWC",
+                    )
+
+                # Log generated decoder outputs
+                image_dec = plot_tensor(y_dec.squeeze().cpu())
+                if hasattr(self.logger.experiment, "log"):
+                    import wandb
+
+                    self.logger.experiment.log(
+                        {f"generated_dec/{i}": wandb.Image(image_dec)},
+                        step=self.current_epoch,
+                    )
+                else:
+                    self.logger.experiment.add_image(
+                        f"generated_dec/{i}",
+                        image_dec,
+                        self.current_epoch,
+                        dataformats="HWC",
+                    )
+
+                # Log alignment
+                image_attn = plot_tensor(attn.squeeze().cpu())
+                if hasattr(self.logger.experiment, "log"):
+                    import wandb
+
+                    self.logger.experiment.log(
+                        {f"alignment/{i}": wandb.Image(image_attn)},
+                        step=self.current_epoch,
+                    )
+                else:
+                    self.logger.experiment.add_image(
+                        f"alignment/{i}",
+                        image_attn,
+                        self.current_epoch,
+                        dataformats="HWC",
+                    )
 
     def on_before_optimizer_step(self, optimizer):
         self.log_dict(

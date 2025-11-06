@@ -26,7 +26,7 @@ from torch.nn.utils import remove_weight_norm
 from torch.nn.utils.parametrizations import weight_norm
 from torch.distributions.uniform import Uniform
 
-from transformer.activation import Snake
+from jyutvoice.transformer.activation import Snake
 from jyutvoice.utils.common import get_padding
 from jyutvoice.utils.common import init_weights
 

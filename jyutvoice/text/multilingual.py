@@ -50,14 +50,15 @@ def g2p(
         lang: Language for Chinese chunks, "yue" for Cantonese or "zh" for Mandarin.
 
     Returns:
-        phones, tones, word2ph, word_pos, syllable_pos
+        phones, tones, word2ph, word_pos, syllable_pos, lang
     """
     segments = split_text(text)
-    all_phones = ["_"]
-    all_tones = [0]
-    all_word2ph = [1]
-    all_word_pos = [0]
-    all_syllable_pos = [0]
+    all_phones = []
+    all_tones = []
+    all_word2ph = []
+    all_word_pos = []
+    all_syllable_pos = []
+    all_lang = []
     total_words = 0
 
     for chunk, is_chinese in segments:
@@ -68,10 +69,12 @@ def g2p(
                 phones, tones, word2ph, word_pos, syllable_pos = g2p_yue(
                     chunk, padding=False
                 )
+                all_lang.extend([0] * len(phones))
             elif lang == "zh":
                 phones, tones, word2ph, word_pos, syllable_pos = g2p_zh(
                     chunk, padding=False
                 )
+                all_lang.extend([1] * len(phones))
             else:
                 raise ValueError(
                     f"Invalid lang '{lang}' for Chinese. Use 'yue' or 'zh'."
@@ -80,6 +83,7 @@ def g2p(
             phones, tones, word2ph, word_pos, syllable_pos = g2p_en(
                 chunk, padding=False
             )
+            all_lang.extend([2] * len(phones))
 
         # Append to global lists
         all_phones.extend(phones)

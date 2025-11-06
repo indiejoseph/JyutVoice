@@ -5,3 +5,5 @@ pycantonese
 pypinyin
 pydips
 hyperpyyaml
+g2p_en
+transformers

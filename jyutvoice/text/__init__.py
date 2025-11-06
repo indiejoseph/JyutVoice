@@ -30,7 +30,7 @@ def text_to_sequence(text, lang: str, phone=None):
     """
 
     _, phones, tones, word_pos, syllable_pos = clean_text(
-        text, phone, lang, padding=True
+        text, lang=lang, phoneme=phone, padding=True
     )
     phone_token_ids = cleaned_text_to_sequence(phones)
     lang_ids = [_lang_to_id[lang]] * len(phone_token_ids)

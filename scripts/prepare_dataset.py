@@ -20,8 +20,7 @@ Expected dataset format (JSON/CSV):
     {
         "text": "你好世界",
         "lang": "zh",      # Language code: "zh" (Chinese), "en" (English), etc.
-        "audio": "path/to/audio.wav",
-        "speaker_id": 1
+        "audio": "path/to/audio.wav"
     }
 
 Output:
@@ -71,7 +70,7 @@ def word_seg(row):
     try:
         if lang != "en":
             # Chinese text: apply word segmentation
-            seg = ws_model.cut(text, mode="coarse")
+            seg = ws_model.cut(text.replace(" ", ""), mode="coarse")
             text = " ".join(seg)
 
             # Only accept Chinese characters, spaces and basic punctuation
