@@ -12,7 +12,7 @@ finals_converter = FinalsConverter()
 
 def text_to_pinyin(word: str) -> List[tuple]:
     """Convert Chinese text to pinyin initials and finals."""
-    initials_list = pypinyin.pinyin(word, style=Style.INITIALS)
+    initials_list = pypinyin.pinyin(word, style=Style.INITIALS, strict=False)
     finals_list = pypinyin.pinyin(word, style=Style.FINALS_TONE3, strict=False)
     initials_flat = [item[0] for item in initials_list]
     finals_flat = [item[0] for item in finals_list]

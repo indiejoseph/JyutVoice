@@ -19,210 +19,210 @@ from jyutvoice.text import text_to_sequence
 from jyutvoice.transformer.upsample_encoder import UpsampleConformerEncoder
 
 
-def load_spk_embedding(onnx_path: str):
-    option = onnxruntime.SessionOptions()
-    option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-    option.intra_op_num_threads = 1
-    ort_session = onnxruntime.InferenceSession(
-        onnx_path, sess_options=option, providers=["CPUExecutionProvider"]
-    )
-    return ort_session
+# def load_spk_embedding(onnx_path: str):
+#     option = onnxruntime.SessionOptions()
+#     option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+#     option.intra_op_num_threads = 1
+#     ort_session = onnxruntime.InferenceSession(
+#         onnx_path, sess_options=option, providers=["CPUExecutionProvider"]
+#     )
+#     return ort_session
 
 
-def get_spk_embedding(audio, onnx_session):
-    audio_tensor = None
+# def get_spk_embedding(audio, onnx_session):
+#     audio_tensor = None
 
-    if isinstance(audio, np.ndarray):
-        audio_tensor = torch.from_numpy(audio).float().unsqueeze(dim=0)
-    elif isinstance(audio, torch.Tensor):
-        if audio.dim() == 1:
-            audio_tensor = audio.float().unsqueeze(dim=0)
-        elif audio.dim() == 2:
-            audio_tensor = audio.float()
-        else:
-            raise ValueError("Audio tensor must be 1D or 2D.")
-    if audio_tensor is None:
-        raise ValueError("Audio must be a numpy array or a torch tensor.")
-    feat = kaldi.fbank(audio_tensor, num_mel_bins=80, dither=0, sample_frequency=16000)
-    feat = feat - feat.mean(dim=0, keepdim=True)
-    embedding = (
-        onnx_session.run(
-            None,
-            {onnx_session.get_inputs()[0].name: feat.unsqueeze(dim=0).cpu().numpy()},
-        )[0]
-        .flatten()
-        .tolist()
-    )
+#     if isinstance(audio, np.ndarray):
+#         audio_tensor = torch.from_numpy(audio).float().unsqueeze(dim=0)
+#     elif isinstance(audio, torch.Tensor):
+#         if audio.dim() == 1:
+#             audio_tensor = audio.float().unsqueeze(dim=0)
+#         elif audio.dim() == 2:
+#             audio_tensor = audio.float()
+#         else:
+#             raise ValueError("Audio tensor must be 1D or 2D.")
+#     if audio_tensor is None:
+#         raise ValueError("Audio must be a numpy array or a torch tensor.")
+#     feat = kaldi.fbank(audio_tensor, num_mel_bins=80, dither=0, sample_frequency=16000)
+#     feat = feat - feat.mean(dim=0, keepdim=True)
+#     embedding = (
+#         onnx_session.run(
+#             None,
+#             {onnx_session.get_inputs()[0].name: feat.unsqueeze(dim=0).cpu().numpy()},
+#         )[0]
+#         .flatten()
+#         .tolist()
+#     )
 
-    return embedding
-
-
-def load_speech_tokenizer(speech_tokenizer_path: str):
-    """Load speech tokenizer ONNX model."""
-    option = onnxruntime.SessionOptions()
-    option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-    option.intra_op_num_threads = 1
-    session = onnxruntime.InferenceSession(
-        speech_tokenizer_path,
-        sess_options=option,
-        providers=["CPUExecutionProvider"],
-    )
-    return session
+#     return embedding
 
 
-def extract_speech_token(audio, speech_tokenizer_session):
-    """
-    Extract speech tokens from audio using speech tokenizer.
-
-    Args:
-        audio: audio signal (torch.Tensor or numpy.ndarray), shape (T,) at 16kHz
-        speech_tokenizer_session: ONNX speech tokenizer session
-
-    Returns:
-        speech_token: tensor of shape (1, num_tokens)
-        speech_token_len: tensor of shape (1,) with token sequence length
-    """
-    # Ensure audio is on CPU for processing
-    if isinstance(audio, torch.Tensor):
-        audio = audio.cpu().numpy()
-    elif isinstance(audio, np.ndarray):
-        pass
-    else:
-        raise ValueError("Audio must be torch.Tensor or numpy.ndarray")
-
-    # Convert to torch tensor for mel-spectrogram
-    audio_tensor = torch.from_numpy(audio).float().unsqueeze(0)
-
-    # Extract mel-spectrogram (whisper format)
-    feat = whisper.log_mel_spectrogram(audio_tensor, n_mels=128)
-
-    # Run speech tokenizer
-    speech_token = (
-        speech_tokenizer_session.run(
-            None,
-            {
-                speech_tokenizer_session.get_inputs()[0]
-                .name: feat.detach()
-                .cpu()
-                .numpy(),
-                speech_tokenizer_session.get_inputs()[1].name: np.array(
-                    [feat.shape[2]], dtype=np.int32
-                ),
-            },
-        )[0]
-        .flatten()
-        .tolist()
-    )
-
-    speech_token = torch.tensor([speech_token], dtype=torch.int32)
-    speech_token_len = torch.tensor([len(speech_token[0])], dtype=torch.int32)
-
-    return speech_token, speech_token_len
+# def load_speech_tokenizer(speech_tokenizer_path: str):
+#     """Load speech tokenizer ONNX model."""
+#     option = onnxruntime.SessionOptions()
+#     option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+#     option.intra_op_num_threads = 1
+#     session = onnxruntime.InferenceSession(
+#         speech_tokenizer_path,
+#         sess_options=option,
+#         providers=["CPUExecutionProvider"],
+#     )
+#     return session
 
 
-class FlowEncoder(torch.nn.Module):
-    def __init__(self, vocab_size=6561, input_size=512, output_size=80, device="cpu"):
-        super().__init__()
-        self.device = device
-        self.input_embedding = torch.nn.Embedding(vocab_size, input_size)
-        # Instantiate encoder with CosyVoice2 architecture
-        self.encoder = UpsampleConformerEncoder(
-            output_size=512,
-            attention_heads=8,
-            linear_units=2048,
-            num_blocks=6,
-            dropout_rate=0.1,
-            positional_dropout_rate=0.1,
-            attention_dropout_rate=0.1,
-            normalize_before=True,
-            input_layer="linear",
-            pos_enc_layer_type="rel_pos_espnet",
-            selfattention_layer_type="rel_selfattn",
-            input_size=512,
-            use_cnn_module=False,
-            macaron_style=False,
-            static_chunk_size=25,
-        ).to(device)
-        # Project encoder output from 512 to output_size (80)
-        self.encoder_proj = torch.nn.Linear(512, output_size)
+# def extract_speech_token(audio, speech_tokenizer_session):
+#     """
+#     Extract speech tokens from audio using speech tokenizer.
 
-    def forward(self, token, token_len):
-        """
-        Process speech tokens through the encoder.
+#     Args:
+#         audio: audio signal (torch.Tensor or numpy.ndarray), shape (T,) at 16kHz
+#         speech_tokenizer_session: ONNX speech tokenizer session
 
-        Args:
-            token: speech tokens, shape (batch, seq_len)
-            token_len: token sequence lengths, shape (batch,)
+#     Returns:
+#         speech_token: tensor of shape (1, num_tokens)
+#         speech_token_len: tensor of shape (1,) with token sequence length
+#     """
+#     # Ensure audio is on CPU for processing
+#     if isinstance(audio, torch.Tensor):
+#         audio = audio.cpu().numpy()
+#     elif isinstance(audio, np.ndarray):
+#         pass
+#     else:
+#         raise ValueError("Audio must be torch.Tensor or numpy.ndarray")
 
-        Returns:
-            h: encoder output, shape (batch, seq_len, 80)
-            h_lengths: output lengths, shape (batch,)
-        """
-        mask = (~make_pad_mask(token_len)).float().unsqueeze(-1).to(self.device)
-        token = self.input_embedding(torch.clamp(token, min=0)) * mask
+#     # Convert to torch tensor for mel-spectrogram
+#     audio_tensor = torch.from_numpy(audio).float().unsqueeze(0)
 
-        # Encode
-        h, h_lengths = self.encoder(token, token_len, streaming=False)
-        # Project to output size (80)
-        h = self.encoder_proj(h)
+#     # Extract mel-spectrogram (whisper format)
+#     feat = whisper.log_mel_spectrogram(audio_tensor, n_mels=128)
 
-        return h, h_lengths
+#     # Run speech tokenizer
+#     speech_token = (
+#         speech_tokenizer_session.run(
+#             None,
+#             {
+#                 speech_tokenizer_session.get_inputs()[0]
+#                 .name: feat.detach()
+#                 .cpu()
+#                 .numpy(),
+#                 speech_tokenizer_session.get_inputs()[1].name: np.array(
+#                     [feat.shape[2]], dtype=np.int32
+#                 ),
+#             },
+#         )[0]
+#         .flatten()
+#         .tolist()
+#     )
 
+#     speech_token = torch.tensor([speech_token], dtype=torch.int32)
+#     speech_token_len = torch.tensor([len(speech_token[0])], dtype=torch.int32)
 
-def load_flow_encoder(flow_encoder_path, device="cpu"):
-    """
-    Load the UpsampleConformerEncoder from a pretrained model checkpoint.
-
-    Args:
-        flow_encoder_path (str): Path to the pretrained flow model weights
-        device (str or torch.device): Device to load model on
-
-    Returns:
-        torch.nn.Module: Loaded encoder module ready for inference
-    """
-    if flow_encoder_path is None:
-        return None
-
-    flow_encoder = FlowEncoder(device=device)
-
-    # Load pretrained weights
-    state_dict = torch.load(flow_encoder_path, map_location=device, weights_only=True)
-    flow_encoder.load_state_dict(state_dict)
-    flow_encoder.eval()
-
-    return flow_encoder
+#     return speech_token, speech_token_len
 
 
-def get_decoder_hidden_state(speech_token, speech_token_len, flow_encoder, device):
-    """
-    Extract hidden state from the flow encoder (CosyVoice2's encoder).
+# class FlowEncoder(torch.nn.Module):
+#     def __init__(self, vocab_size=6561, input_size=512, output_size=80, device="cpu"):
+#         super().__init__()
+#         self.device = device
+#         self.input_embedding = torch.nn.Embedding(vocab_size, input_size)
+#         # Instantiate encoder with CosyVoice2 architecture
+#         self.encoder = UpsampleConformerEncoder(
+#             output_size=512,
+#             attention_heads=8,
+#             linear_units=2048,
+#             num_blocks=6,
+#             dropout_rate=0.1,
+#             positional_dropout_rate=0.1,
+#             attention_dropout_rate=0.1,
+#             normalize_before=True,
+#             input_layer="linear",
+#             pos_enc_layer_type="rel_pos_espnet",
+#             selfattention_layer_type="rel_selfattn",
+#             input_size=512,
+#             use_cnn_module=False,
+#             macaron_style=False,
+#             static_chunk_size=25,
+#         ).to(device)
+#         # Project encoder output from 512 to output_size (80)
+#         self.encoder_proj = torch.nn.Linear(512, output_size)
 
-    This function processes speech tokens through the encoder to get
-    the hidden representation used for prior loss computation during training.
+#     def forward(self, token, token_len):
+#         """
+#         Process speech tokens through the encoder.
 
-    Args:
-        speech_token (torch.Tensor): Speech tokens, shape (batch, token_len)
-        speech_token_len (torch.Tensor): Lengths of speech token sequences
-        flow_encoder (torch.nn.Module): The flow encoder
-        device (torch.device): Device to run inference on
+#         Args:
+#             token: speech tokens, shape (batch, seq_len)
+#             token_len: token sequence lengths, shape (batch,)
 
-    Returns:
-        torch.Tensor: Hidden state from encoder, shape (batch, token_len, 512)
-    """
-    if flow_encoder is None:
-        raise ValueError(
-            "flow_encoder must be provided to extract decoder hidden state"
-        )
+#         Returns:
+#             h: encoder output, shape (batch, seq_len, 80)
+#             h_lengths: output lengths, shape (batch,)
+#         """
+#         mask = (~make_pad_mask(token_len)).float().unsqueeze(-1).to(self.device)
+#         token = self.input_embedding(torch.clamp(token, min=0)) * mask
 
-    speech_token = speech_token.to(device)
-    speech_token_len = speech_token_len.to(device)
+#         # Encode
+#         h, h_lengths = self.encoder(token, token_len, streaming=False)
+#         # Project to output size (80)
+#         h = self.encoder_proj(h)
 
-    with torch.no_grad():
-        # Get encoder output and lengths
-        h, h_lengths = flow_encoder(speech_token, speech_token_len)
-        # h shape: (batch, token_len, 512)
+#         return h, h_lengths
 
-    return h
+
+# def load_flow_encoder(flow_encoder_path, device="cpu"):
+#     """
+#     Load the UpsampleConformerEncoder from a pretrained model checkpoint.
+
+#     Args:
+#         flow_encoder_path (str): Path to the pretrained flow model weights
+#         device (str or torch.device): Device to load model on
+
+#     Returns:
+#         torch.nn.Module: Loaded encoder module ready for inference
+#     """
+#     if flow_encoder_path is None:
+#         return None
+
+#     flow_encoder = FlowEncoder(device=device)
+
+#     # Load pretrained weights
+#     state_dict = torch.load(flow_encoder_path, map_location=device, weights_only=True)
+#     flow_encoder.load_state_dict(state_dict)
+#     flow_encoder.eval()
+
+#     return flow_encoder
+
+
+# def get_decoder_hidden_state(speech_token, speech_token_len, flow_encoder, device):
+#     """
+#     Extract hidden state from the flow encoder (CosyVoice2's encoder).
+
+#     This function processes speech tokens through the encoder to get
+#     the hidden representation used for prior loss computation during training.
+
+#     Args:
+#         speech_token (torch.Tensor): Speech tokens, shape (batch, token_len)
+#         speech_token_len (torch.Tensor): Lengths of speech token sequences
+#         flow_encoder (torch.nn.Module): The flow encoder
+#         device (torch.device): Device to run inference on
+
+#     Returns:
+#         torch.Tensor: Hidden state from encoder, shape (batch, token_len, 512)
+#     """
+#     if flow_encoder is None:
+#         raise ValueError(
+#             "flow_encoder must be provided to extract decoder hidden state"
+#         )
+
+#     speech_token = speech_token.to(device)
+#     speech_token_len = speech_token_len.to(device)
+
+#     with torch.no_grad():
+#         # Get encoder output and lengths
+#         h, h_lengths = flow_encoder(speech_token, speech_token_len)
+#         # h shape: (batch, token_len, 512)
+
+#     return h
 
 
 class TextMelDataModule(LightningDataModule):
@@ -231,7 +231,6 @@ class TextMelDataModule(LightningDataModule):
         name,
         dataset_path,
         dataset_valid_ratio,
-        speaker_embedding_model_path,
         batch_size,
         num_workers,
         pin_memory,
@@ -246,28 +245,12 @@ class TextMelDataModule(LightningDataModule):
         token_mel_ratio,
         seed,
         load_durations,
-        flow_encoder_path,
-        speech_tokenizer_path,
     ):
         super().__init__()
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
-
-        # Load flow encoder if path is provided
-        if self.hparams.flow_encoder_path is not None:
-            self.flow_encoder = load_flow_encoder(self.hparams.flow_encoder_path)
-        else:
-            self.flow_encoder = None
-
-        # Load speech tokenizer if path is provided
-        if self.hparams.speech_tokenizer_path is not None:
-            self.speech_tokenizer = load_speech_tokenizer(
-                self.hparams.speech_tokenizer_path
-            )
-        else:
-            self.speech_tokenizer = None
 
     def setup(self, stage: Optional[str] = None):  # pylint: disable=unused-argument
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -281,10 +264,6 @@ class TextMelDataModule(LightningDataModule):
         else:
             ds = load_dataset(self.hparams.dataset_path, split="train")
         ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio)
-
-        speaker_embedding_onnx_session = load_spk_embedding(
-            self.hparams.speaker_embedding_model_path
-        )
 
         self.trainset = (
             TextMelDataset(  # pylint: disable=attribute-defined-outside-init
@@ -301,9 +280,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
-                speaker_embedding_onnx_session,
-                self.flow_encoder,
-                self.speech_tokenizer,
             )
         )
         self.validset = (
@@ -321,9 +297,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
-                speaker_embedding_onnx_session,
-                self.flow_encoder,
-                self.speech_tokenizer,
             )
         )
 
@@ -380,9 +353,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
-        speaker_embedding_onnx_session=None,
-        flow_encoder=None,
-        speech_tokenizer=None,
     ):
         self.dataset = dataset
         self.add_blank = add_blank
@@ -395,9 +365,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.f_max = f_max
         self.token_mel_ratio = token_mel_ratio
         self.load_durations = load_durations
-        self.speaker_embedding_onnx_session = speaker_embedding_onnx_session
-        self.flow_encoder = flow_encoder
-        self.speech_tokenizer = speech_tokenizer
         self.tmp_dir = Path(tmp_dir)
 
         # Create temporary directory if it does not exist
@@ -410,8 +377,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         lang = row["lang"]
         phone = row["phone"]
         audio = row["audio"]["array"]
-        decoder_h = row.get("decoder_h", None)
-        spk_emb = row.get("spk_emb", None)
         audio_path = (
             row["audio"]["path"]
             if row["audio"]["path"] is not None
@@ -451,57 +416,36 @@ class TextMelDataset(torch.utils.data.Dataset):
             audio = np.array(audio, dtype=np.float32)
         else:
             audio = np.array(audio, dtype=np.float32)
-        audio16k = audio
-        audio24k = audio
-        # Resample audio:
-        # - audio24k: for mel-spectrogram generation (CosyVoice2 uses 24kHz)
-        # - audio16k: for speaker embedding extraction (CampPlus requires 16kHz)
-        if sr == 16_000:
-            audio24k = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
-        elif sr == 24_000:
-            audio16k = librosa.resample(audio, orig_sr=sr, target_sr=16_000)
-        mel = self.get_mel(audio24k, self.sample_rate)
+        # Resample audio for mel-spectrogram generation (CosyVoice2 uses 24kHz)
+        if sr != self.sample_rate:
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
+        mel = self.get_mel(audio, self.sample_rate)
 
-        # caching speaker embeddings
-        if spk_emb is None and self.speaker_embedding_onnx_session is not None:
-            spk_emb_path = self.tmp_dir / "spk_emb" / (audio_path + ".pt")
-
-            if spk_emb_path.exists():
-                spk_emb = torch.load(spk_emb_path)
-            else:
-                spk_emb = get_spk_embedding(
-                    audio16k, self.speaker_embedding_onnx_session
-                )
-                spk_emb_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(spk_emb, spk_emb_path)
+        # Load pre-computed speaker embedding from dataset, or provide default
+        if "spk_emb" in row:
+            spk_emb = (
+                torch.tensor(row["spk_emb"], dtype=torch.float32)
+                if not isinstance(row["spk_emb"], torch.Tensor)
+                else row["spk_emb"].float()
+            )
+        else:
+            # Provide default speaker embedding for testing
+            spk_emb = torch.zeros(192, dtype=torch.float32)
 
         durations = self.get_durations(audio, text) if self.load_durations else None
 
-        # Extract decoder hidden state for prior loss computation
-        if (
-            decoder_h is None
-            and self.flow_encoder is not None
-            and self.speech_tokenizer is not None
-        ):
-            decoder_h_path = self.tmp_dir / "decoder_h" / (audio_path + ".pt")
-            # caching decoder hidden states
-            if decoder_h_path.exists():
-                decoder_h = torch.load(decoder_h_path)
-            else:
-                # Extract speech tokens from audio (16kHz required for speech tokenizer)
-                speech_token, speech_token_len = extract_speech_token(
-                    audio16k, self.speech_tokenizer
-                )
-
-                # Pass speech tokens to flow encoder to get hidden state
-                decoder_h = get_decoder_hidden_state(
-                    speech_token, speech_token_len, self.flow_encoder, "cpu"
-                )
-                # decoder_h shape: (1, token_len, 512)
-                # Save for caching: shape should be (1, token_len, 512)
-                decoder_h_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(decoder_h.squeeze(0), decoder_h_path)
-                decoder_h = decoder_h.squeeze(0)  # Remove batch dim -> (token_len, 512)
+        # Load pre-computed decoder hidden state from dataset, or provide default
+        if "decoder_h" in row:
+            decoder_h = (
+                torch.tensor(row["decoder_h"], dtype=torch.float32)
+                if not isinstance(row["decoder_h"], torch.Tensor)
+                else row["decoder_h"].float()
+            )
+        else:
+            # Provide default decoder hidden state for testing
+            # Shape should be (time_steps, n_feats) where n_feats matches mel features (80)
+            mel_time_steps = mel.shape[1]
+            decoder_h = torch.zeros(mel_time_steps, self.n_mels, dtype=torch.float32)
 
         if self.token_mel_ratio != 0:
             decoder_h_len = decoder_h.shape[0]
@@ -615,21 +559,26 @@ class TextMelDataset(torch.utils.data.Dataset):
 
 
 class TextMelBatchCollate:
+    def __init__(self, n_mels=80):
+        self.n_mels = n_mels
+
     def __call__(self, batch):
         B = len(batch)
         y_max_length = max(
             [item["y"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
+        y_max_length = fix_len_compatibility(y_max_length)
         x_max_length = max(
             [item["x"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
         n_feats = batch[0]["y"].shape[-2]
 
-        # Check if decoder_h is present and get its hidden dimension
-        has_decoder_h = batch[0].get("decoder_h") is not None
-        decoder_h_dim = None
-        if has_decoder_h:
-            decoder_h_dim = batch[0]["decoder_h"].shape[-1]
+        # Get decoder_h dimension from the actual data (hidden state dimension)
+        decoder_h_dim = (
+            batch[0]["decoder_h"].shape[-1]
+            if len(batch[0]["decoder_h"].shape) >= 2
+            else self.n_mels
+        )
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
         x = torch.zeros((B, x_max_length), dtype=torch.long)
@@ -639,16 +588,11 @@ class TextMelBatchCollate:
         syllable_pos = torch.zeros((B, x_max_length), dtype=torch.long)
         durations = torch.zeros((B, x_max_length), dtype=torch.long)
         spk_embed = torch.zeros(B, 192, dtype=torch.float32)
-        decoder_h = None
-        if has_decoder_h:
-            decoder_h = torch.zeros(
-                (B, y_max_length, decoder_h_dim), dtype=torch.float32
-            )
+        decoder_h = torch.zeros((B, y_max_length, decoder_h_dim), dtype=torch.float32)
 
-        y_lengths, x_lengths, decoder_h_lengths = [], [], []
-        filepaths, x_texts = [], []
+        y_lengths, x_lengths = [], []
         for i, item in enumerate(batch):
-            y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_ = (
+            y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_, decoder_h_ = (
                 item["y"],
                 item["x"],
                 item["lang"],
@@ -656,6 +600,7 @@ class TextMelBatchCollate:
                 item["word_pos"],
                 item["syllable_pos"],
                 item["spk_emb"],
+                item["decoder_h"],
             )
             y_lengths.append(y_.shape[-1])
             x_lengths.append(x_.shape[-1])
@@ -665,14 +610,22 @@ class TextMelBatchCollate:
             tone[i, : tone_.shape[-1]] = tone_
             word_pos[i, : word_pos_.shape[-1]] = word_pos_
             syllable_pos[i, : syllable_pos_.shape[-1]] = syllable_pos_
-            if spk_embed_ is not None:
-                spk_embed[i] = torch.tensor(spk_embed_).float()
-            if has_decoder_h and item.get("decoder_h") is not None:
-                decoder_h_ = item["decoder_h"]
-                decoder_h[i, : decoder_h_.shape[0]] = decoder_h_
-                decoder_h_lengths.append(decoder_h_.shape[0])
-            filepaths.append(item["filepath"])
-            x_texts.append(item["x_text"])
+            spk_embed[i] = torch.tensor(spk_embed_).float()
+            # Handle decoder_h with potentially different dimensions
+            decoder_h_padded = torch.zeros(
+                y_max_length, decoder_h_dim, dtype=torch.float32
+            )
+            decoder_h_actual = torch.tensor(decoder_h_).float()
+            actual_length = min(decoder_h_actual.shape[0], y_max_length)
+            if len(decoder_h_actual.shape) == 2:  # (time, hidden_dim)
+                decoder_h_padded[:actual_length, : decoder_h_actual.shape[1]] = (
+                    decoder_h_actual[:actual_length]
+                )
+            else:  # Handle unexpected shapes
+                decoder_h_padded[
+                    :actual_length, : min(decoder_h_dim, decoder_h_actual.shape[-1])
+                ] = decoder_h_actual[:actual_length]
+            decoder_h[i] = decoder_h_padded
             if item["durations"] is not None:
                 durations[i, : item["durations"].shape[-1]] = item["durations"]
 
@@ -688,16 +641,9 @@ class TextMelBatchCollate:
             "tone": tone,
             "word_pos": word_pos,
             "syllable_pos": syllable_pos,
-            "filepaths": filepaths,
-            "x_texts": x_texts,
             "spk_embed": spk_embed,
+            "decoder_h": decoder_h,
             "durations": durations if not torch.eq(durations, 0).all() else None,
         }
-
-        if has_decoder_h:
-            batch_dict["decoder_h"] = decoder_h
-            batch_dict["decoder_h_lengths"] = torch.tensor(
-                decoder_h_lengths, dtype=torch.long
-            )
 
         return batch_dict

@@ -50,6 +50,7 @@ class JyutVoiceTTS(BaseLightningClass):
         for param in self.spk_embed_affine_layer.parameters():
             param.requires_grad = False
         self.decoder.eval()
+        self.spk_embed_affine_layer.eval()
 
     def load_pretrain(self, pretrain_path):
         """
@@ -94,8 +95,8 @@ class JyutVoiceTTS(BaseLightningClass):
         tone,
         word_pos,
         syllable_pos,
-        n_timesteps,
         spk_embed,
+        n_timesteps=10,
         temperature=1.0,
         length_scale=1.0,
     ):
@@ -221,7 +222,6 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
-        decoder_h_lengths,
         durations=None,
     ):
         """
@@ -241,7 +241,6 @@ class JyutVoiceTTS(BaseLightningClass):
             syllable_pos: Syllable position information (B, T_text)
             spk_embed,: Speaker embedding (B, spk_embed_dim)
             decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_mel, n_feats)
-            decoder_h_lengths: Lengths of decoder_h sequences (B,)
             durations: Optional ground truth durations for teacher forcing
         """
 
@@ -313,9 +312,7 @@ class JyutVoiceTTS(BaseLightningClass):
         # The prior loss trains the text encoder to match the frozen flow encoder representations
         decoder_max_length = decoder_h.shape[1]
         decoder_h_mask = (
-            sequence_mask(decoder_h_lengths, decoder_max_length)
-            .unsqueeze(1)
-            .to(mu_y.dtype)
+            sequence_mask(y_lengths, decoder_max_length).unsqueeze(1).to(mu_y.dtype)
         )
         mu_y_t = mu_y.transpose(1, 2)  # (B, T_mel, n_feats)
 

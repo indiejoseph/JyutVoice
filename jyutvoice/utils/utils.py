@@ -136,8 +136,25 @@ def intersperse(lst, item):
 
 
 def save_figure_to_numpy(fig):
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    # Use print_to_buffer for matplotlib 3.7+, fallback to older methods
+    try:
+        # Try the modern method first (matplotlib >= 3.7)
+        buffer, shape = fig.canvas.print_to_buffer()
+        data = np.frombuffer(buffer, dtype=np.uint8)
+        data = data.reshape(shape + (4,))  # RGBA
+        data = data[:, :, :3]  # Convert RGBA to RGB
+    except Exception:
+        # Fallback for older matplotlib versions
+        try:
+            # Try buffer_rgba
+            buffer = fig.canvas.buffer_rgba()
+            data = np.frombuffer(buffer, dtype=np.uint8)
+            data = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+            data = data[:, :, :3]  # Convert RGBA to RGB
+        except AttributeError:
+            # Final fallback to tostring_rgb
+            data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
+            data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     return data
 
 

@@ -6,11 +6,11 @@ The benefit of this abstraction is that all the logic outside of model definitio
 import inspect
 from abc import ABC
 from typing import Any, Dict
-
-import torch
+import wandb
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 from torch.optim.lr_scheduler import LambdaLR, SequentialLR
+import wandb
 
 from jyutvoice import utils
 from jyutvoice.utils.utils import plot_tensor
@@ -90,7 +90,6 @@ class BaseLightningClass(LightningModule, ABC):
         )
         spk_embed = batch["spk_embed"]
         decoder_h = batch["decoder_h"]
-        decoder_h_lengths = batch["decoder_h_lengths"]
 
         dur_loss, prior_loss, diff_loss, *_ = self(
             x=x,
@@ -103,7 +102,6 @@ class BaseLightningClass(LightningModule, ABC):
             syllable_pos=syllable_pos,
             spk_embed=spk_embed,
             decoder_h=decoder_h,
-            decoder_h_lengths=decoder_h_lengths,
             durations=batch.get("durations", None),
         )
         return {
@@ -129,6 +127,7 @@ class BaseLightningClass(LightningModule, ABC):
             prog_bar=False,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         self.log(
@@ -138,6 +137,7 @@ class BaseLightningClass(LightningModule, ABC):
             prog_bar=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         self.log(
@@ -147,6 +147,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
         self.log(
             "sub_loss/train_prior_loss",
@@ -155,6 +156,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
         self.log(
             "sub_loss/train_diff_loss",
@@ -163,6 +165,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         # total_loss = sum(loss_dict.values())
@@ -177,6 +180,7 @@ class BaseLightningClass(LightningModule, ABC):
             logger=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         return {"loss": total_loss, "log": loss_dict}
@@ -190,6 +194,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
         self.log(
             "sub_loss/val_prior_loss",
@@ -198,6 +203,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
         self.log(
             "sub_loss/val_diff_loss",
@@ -206,6 +212,7 @@ class BaseLightningClass(LightningModule, ABC):
             on_epoch=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         # total_loss = sum(loss_dict.values())
@@ -220,111 +227,104 @@ class BaseLightningClass(LightningModule, ABC):
             logger=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=batch["x"].shape[0],
         )
 
         return total_loss
 
     def on_validation_end(self) -> None:
-        if self.trainer.is_global_zero:
+        # Wrap visualization and synthesis in a try/except to prevent hook errors from
+        # crashing the training loop. Any exception here will be logged and skipped.
+        if not self.trainer.is_global_zero:
+            return
+
+        try:
             one_batch = next(iter(self.trainer.val_dataloaders))
+
             if self.current_epoch == 0:
                 log.debug("Plotting original samples")
-                for i in range(2):
-                    y = one_batch["y"][i].unsqueeze(0).to(self.device)
-                    image = plot_tensor(y.squeeze().cpu())
-                    # Check if using wandb logger
-                    if hasattr(self.logger.experiment, "log"):
-                        import wandb
-
-                        self.logger.experiment.log(
-                            {f"original/{i}": wandb.Image(image)},
-                            step=self.current_epoch,
-                        )
-                    else:
-                        # Fallback to tensorboard API
-                        self.logger.experiment.add_image(
-                            f"original/{i}",
-                            image,
-                            self.current_epoch,
-                            dataformats="HWC",
-                        )
+                for i in range(min(2, one_batch["y"].shape[0])):
+                    try:
+                        y = one_batch["y"][i].unsqueeze(0).to(self.device)
+                        image = plot_tensor(y.squeeze().cpu())
+                        # Check if using wandb logger
+                        if hasattr(self.logger.experiment, "log"):
+                            self.logger.experiment.log(
+                                {f"original/{i}": wandb.Image(image)},
+                                step=self.current_epoch,
+                            )
+                        else:
+                            # Fallback to tensorboard API
+                            self.logger.experiment.add_image(
+                                f"original/{i}",
+                                image,
+                                self.current_epoch,
+                                dataformats="HWC",
+                            )
+                    except Exception:
+                        log.exception("Failed to plot original sample %d", i)
 
             log.debug("Synthesising...")
             for i in range(2):
-                x = one_batch["x"][i].unsqueeze(0).to(self.device)
-                x_lengths = one_batch["x_lengths"][i].unsqueeze(0).to(self.device)
-                lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
-                tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
-                word_pos = one_batch["word_pos"][i].unsqueeze(0).to(self.device)
-                syllable_pos = one_batch["syllable_pos"][i].unsqueeze(0).to(self.device)
-                spk_embed = (
-                    one_batch["spk_embed"][i].unsqueeze(0).to(self.device)
-                    if one_batch.get("spk_embed") is not None
-                    else None
-                )
-                output = self.synthesise(
-                    x[:, :x_lengths],
-                    x_lengths,
-                    lang,
-                    tone,
-                    word_pos,
-                    syllable_pos,
-                    n_timesteps=10,
-                    spk_embed=spk_embed,
-                )
-                y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
-                attn = output["attn"]
-
-                # Log generated encoder outputs
-                image_enc = plot_tensor(y_enc.squeeze().cpu())
-                if hasattr(self.logger.experiment, "log"):
-                    import wandb
-
-                    self.logger.experiment.log(
-                        {f"generated_enc/{i}": wandb.Image(image_enc)},
-                        step=self.current_epoch,
+                try:
+                    if one_batch["x"].shape[0] <= i:
+                        break
+                    x = one_batch["x"][i].unsqueeze(0).to(self.device)
+                    x_lengths = one_batch["x_lengths"][i].unsqueeze(0).to(self.device)
+                    lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
+                    tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
+                    word_pos = one_batch["word_pos"][i].unsqueeze(0).to(self.device)
+                    syllable_pos = (
+                        one_batch["syllable_pos"][i].unsqueeze(0).to(self.device)
                     )
-                else:
-                    self.logger.experiment.add_image(
-                        f"generated_enc/{i}",
-                        image_enc,
-                        self.current_epoch,
-                        dataformats="HWC",
+                    spk_embed = (
+                        one_batch["spk_embed"][i].unsqueeze(0).to(self.device)
+                        if one_batch.get("spk_embed") is not None
+                        else None
                     )
+                    output = self.synthesise(
+                        x[:, : x_lengths.item()],
+                        x_lengths,
+                        lang[:, : x_lengths.item()],
+                        tone[:, : x_lengths.item()],
+                        word_pos[:, : x_lengths.item()],
+                        syllable_pos[:, : x_lengths.item()],
+                        n_timesteps=10,
+                        spk_embed=spk_embed,
+                    )
+                    y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
+                    attn = output["attn"]
 
-                # Log generated decoder outputs
-                image_dec = plot_tensor(y_dec.squeeze().cpu())
-                if hasattr(self.logger.experiment, "log"):
-                    import wandb
+                    # helper to log an image and swallow per-image errors
+                    def _log_image(name, img_arr):
+                        try:
+                            if hasattr(self.logger.experiment, "log"):
+                                self.logger.experiment.log(
+                                    {name: wandb.Image(img_arr)},
+                                    step=self.current_epoch,
+                                )
+                            else:
+                                self.logger.experiment.add_image(
+                                    name, img_arr, self.current_epoch, dataformats="HWC"
+                                )
+                        except Exception:
+                            log.exception("Failed to log image %s", name)
 
-                    self.logger.experiment.log(
-                        {f"generated_dec/{i}": wandb.Image(image_dec)},
-                        step=self.current_epoch,
-                    )
-                else:
-                    self.logger.experiment.add_image(
-                        f"generated_dec/{i}",
-                        image_dec,
-                        self.current_epoch,
-                        dataformats="HWC",
-                    )
+                    image_enc = plot_tensor(y_enc.squeeze().cpu())
+                    _log_image(f"generated_enc/{i}", image_enc)
 
-                # Log alignment
-                image_attn = plot_tensor(attn.squeeze().cpu())
-                if hasattr(self.logger.experiment, "log"):
-                    import wandb
+                    image_dec = plot_tensor(y_dec.squeeze().cpu())
+                    _log_image(f"generated_dec/{i}", image_dec)
 
-                    self.logger.experiment.log(
-                        {f"alignment/{i}": wandb.Image(image_attn)},
-                        step=self.current_epoch,
-                    )
-                else:
-                    self.logger.experiment.add_image(
-                        f"alignment/{i}",
-                        image_attn,
-                        self.current_epoch,
-                        dataformats="HWC",
-                    )
+                    image_attn = plot_tensor(attn.squeeze().cpu())
+                    _log_image(f"alignment/{i}", image_attn)
+                except Exception:
+                    log.exception("Failed to synthesise/log sample %d", i)
+
+        except Exception:
+            log.exception(
+                "Unexpected error in on_validation_end, skipping visualizations"
+            )
 
     def on_before_optimizer_step(self, optimizer):
         self.log_dict(

@@ -1,6 +1,7 @@
 from typing import List
 
 import hydra
+from omegaconf import OmegaConf
 from lightning import Callback
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
@@ -21,6 +22,10 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
     if not callbacks_cfg:
         log.warning("No callback configs found! Skipping..")
         return callbacks
+
+    # Convert dict to DictConfig if needed
+    if isinstance(callbacks_cfg, dict) and not isinstance(callbacks_cfg, DictConfig):
+        callbacks_cfg = OmegaConf.create(callbacks_cfg)
 
     if not isinstance(callbacks_cfg, DictConfig):
         raise TypeError("Callbacks config must be a DictConfig!")
@@ -49,8 +54,6 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
 
     # Convert dict to DictConfig if needed
     if isinstance(logger_cfg, dict) and not isinstance(logger_cfg, DictConfig):
-        from omegaconf import OmegaConf
-
         logger_cfg = OmegaConf.create(logger_cfg)
 
     if not isinstance(logger_cfg, DictConfig):

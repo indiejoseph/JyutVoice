@@ -68,7 +68,7 @@ def replace_punctuation(text: str, lang="yue") -> str:
             [
                 text
                 for text in replaced_text
-                if text in punctuations and not text.isspace()
+                if (text.isalpha() or text in punctuations) and not text.isspace()
             ]
         )
     else:

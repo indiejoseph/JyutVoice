@@ -209,15 +209,14 @@ def get_syllable_positions(phones: list) -> list:
     }
 
     positions = []
-    for phone in phones:
+    for i, phone in enumerate(phones):
         if phone == "_":  # Padding
             positions.append(0)
         elif phone in vowels:  # Vowel = nucleus
             positions.append(2)
-        else:  # Consonant - need to determine if onset or coda
-            # For simplicity, treat all consonants as onset (1)
-            # A more sophisticated approach would track syllable boundaries
-            positions.append(1)
+        else:  # Consonant
+            prev_phone = phones[i - 1] if i > 0 else None
+            positions.append(3 if prev_phone in vowels else 1)
 
     return positions
 
@@ -303,9 +302,15 @@ def g2p(text, phoneme=None, padding=True):
     assert len(phones) == len(tones), text
     assert len(phones) == sum(word2ph), text
 
-    for i, ws_label in enumerate(ws_labels):
-        num_phones = word2ph[i]
-        word_pos.extend([ws_label] * num_phones)
+    word_pos = []
+    idx = 0
+    for word_idx in range(len(words)):
+        ws_label = ws_labels[word_idx]
+        word_len = len(words[word_idx])
+        for j in range(word_len):
+            num_phones = word2ph[idx]
+            word_pos.extend([ws_label] * num_phones)
+            idx += 1
 
     # Generate syllable positions for phonemes
     syllable_pos = get_syllable_positions(phones)

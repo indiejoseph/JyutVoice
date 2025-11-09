@@ -104,11 +104,11 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
   dataset_path: tmp/dummy_dataset_resaved
-  speaker_embedding_model_path: pretrained_models/campplus.onnx
-  flow_encoder_path: pretrained_models/flow_encoder.pt
-  speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
+  # speaker_embedding_model_path: pretrained_models/campplus.onnx
+  # flow_encoder_path: pretrained_models/flow_encoder.pt
+  # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
   batch_size: 4
-  num_workers: 0
+  num_workers: 2
   pin_memory: true
   dataset_valid_ratio: 0.1
   seed: 42
@@ -127,11 +127,28 @@ trainer: !new:lightning.Trainer
   accelerator: auto
   devices: 1
   precision: bf16-mixed
-  max_epochs: 50
+  max_epochs: 1
   detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
   log_every_n_steps: 1
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
+
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: checkpoints
+    filename: checkpoint_{epoch:03d}
+    monitor: val_loss
+    verbose: False
+    save_last: true
+    save_top_k: 10
+    mode: "min"
+    auto_insert_metric_name: True
+    save_weights_only: False
+    every_n_epochs: 1
+    save_on_train_epoch_end: null
+
+# Checkpoint Configuration
 
 # WandB Logging Configuration
 logger:
