@@ -410,6 +410,8 @@ class TextMelDataset(torch.utils.data.Dataset):
         lang = row["lang"]
         phone = row["phone"]
         audio = row["audio"]["array"]
+        decoder_h = row.get("decoder_h", None)
+        spk_emb = row.get("spk_emb", None)
         audio_path = (
             row["audio"]["path"]
             if row["audio"]["path"] is not None
@@ -459,22 +461,28 @@ class TextMelDataset(torch.utils.data.Dataset):
         elif sr == 24_000:
             audio16k = librosa.resample(audio, orig_sr=sr, target_sr=16_000)
         mel = self.get_mel(audio24k, self.sample_rate)
-        spk_emb = None
-        spk_emb_path = self.tmp_dir / "spk_emb" / (audio_path + ".pt")
 
         # caching speaker embeddings
-        if spk_emb_path.exists():
-            spk_emb = torch.load(spk_emb_path)
-        else:
-            spk_emb = get_spk_embedding(audio16k, self.speaker_embedding_onnx_session)
-            spk_emb_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(spk_emb, spk_emb_path)
+        if spk_emb is None and self.speaker_embedding_onnx_session is not None:
+            spk_emb_path = self.tmp_dir / "spk_emb" / (audio_path + ".pt")
+
+            if spk_emb_path.exists():
+                spk_emb = torch.load(spk_emb_path)
+            else:
+                spk_emb = get_spk_embedding(
+                    audio16k, self.speaker_embedding_onnx_session
+                )
+                spk_emb_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(spk_emb, spk_emb_path)
 
         durations = self.get_durations(audio, text) if self.load_durations else None
 
         # Extract decoder hidden state for prior loss computation
-        decoder_h = None
-        if self.flow_encoder is not None and self.speech_tokenizer is not None:
+        if (
+            decoder_h is None
+            and self.flow_encoder is not None
+            and self.speech_tokenizer is not None
+        ):
             decoder_h_path = self.tmp_dir / "decoder_h" / (audio_path + ".pt")
             # caching decoder hidden states
             if decoder_h_path.exists():

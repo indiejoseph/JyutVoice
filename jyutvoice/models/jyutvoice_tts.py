@@ -25,7 +25,7 @@ class JyutVoiceTTS(BaseLightningClass):
         optimizer=None,
         scheduler=None,
         pretrain_path=None,
-        warmup_steps=1000,
+        warmup_steps=100,
     ):
         super().__init__()
 
