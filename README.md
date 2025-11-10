@@ -90,6 +90,102 @@ with torch.no_grad():
 mel_spec = output['decoder_outputs']  # (1, 80, mel_length)
 ```
 
+## Inference Examples
+
+Use the provided `infer.py` script for easy text-to-speech synthesis with voice cloning:
+
+### Basic Usage
+
+```bash
+# English text
+python infer.py --text "Hello world, this is a test." --lang en --ref_audio reference.wav --output output.wav
+
+# Mandarin Chinese
+python infer.py --text "你好，欢迎使用这个语音合成系统。" --lang zh --ref_audio reference.wav --output output.wav
+
+# Cantonese
+python infer.py --text "你好，歡迎使用呢個語音合成系統。" --lang yue --ref_audio reference.wav --output output.wav
+
+# Multilingual (mixed languages)
+python infer.py --text "你好，歡迎使用呢個 Text to speech 語音合成系統。" --lang multilingual --ref_audio reference.wav --output output.wav
+```
+
+### Advanced Options
+
+```bash
+# Adjust speech speed (0.5 = slower, 2.0 = faster)
+python infer.py --text "Hello world" --lang en --ref_audio reference.wav --output output.wav --length_scale 0.8
+
+# Change diffusion steps (more steps = higher quality but slower)
+python infer.py --text "Hello world" --lang en --ref_audio reference.wav --output output.wav --n_timesteps 20
+
+# Use custom model paths
+python infer.py --text "Hello world" --lang en --ref_audio reference.wav --output output.wav \
+    --tts_checkpoint my_model.ckpt \
+    --flow_encoder custom_flow_encoder.pt \
+    --hift custom_hift.pt
+```
+
+### Voice Cloning
+
+The system supports voice cloning using reference audio:
+
+1. **Reference Audio Requirements:**
+   - Format: WAV, MP3, or other common audio formats
+   - Sample rate: Any (automatically resampled)
+   - Duration: 3-10 seconds recommended
+   - Content: Clear speech from target speaker
+
+2. **Example with different reference audio:**
+   ```bash
+   # Use a high-quality reference for better voice cloning
+   python infer.py --text "今天天气真好" --lang zh --ref_audio high_quality_sample.wav --output cloned_voice.wav
+   ```
+
+### Cantonese with Phonetic Input
+
+For precise Cantonese pronunciation, you can provide phonetic transcription:
+
+```bash
+python infer.py --text "呢隻嘢真係好勁呀。" --lang yue --phone "ni1 zek3 je5 zan1 hai6 hou2 kem5 aa3 ." --ref_audio reference.wav --output output.wav
+```
+
+### Batch Processing
+
+For multiple texts, create a simple script:
+
+```python
+#!/usr/bin/env python3
+import subprocess
+
+texts = [
+    "Hello world",
+    "你好世界", 
+    "呢個係測試"
+]
+
+for i, text in enumerate(texts):
+    lang = "en" if text.isascii() else ("yue" if any(ord(c) > 127 for c in text) else "zh")
+    cmd = f"python infer.py --text '{text}' --lang {lang} --ref_audio reference.wav --output output_{i}.wav"
+    subprocess.run(cmd, shell=True)
+```
+
+### Model Configuration
+
+The inference script uses these default model paths (can be overridden):
+
+- **TTS Checkpoint:** `pretrained_models/epoch=0-step=55872.ckpt`
+- **Flow Encoder:** `pretrained_models/flow_encoder.pt`
+- **Speech Tokenizer:** `pretrained_models/speech_tokenizer_v2.onnx`
+- **Speaker Model:** `pretrained_models/campplus.onnx`
+- **HiFi-GAN Vocoder:** `pretrained_models/hift.pt`
+
+### Performance
+
+- **GPU Memory:** ~4GB for inference
+- **Latency:** ~1-2 seconds per sentence
+- **Output Quality:** 24kHz, high-fidelity speech
+
 ## Architecture
 
 ```
