@@ -289,8 +289,8 @@ class BaseLightningClass(LightningModule, ABC):
                         tone[:, : x_lengths.item()],
                         word_pos[:, : x_lengths.item()],
                         syllable_pos[:, : x_lengths.item()],
-                        n_timesteps=10,
                         spk_embed=spk_embed,
+                        n_timesteps=10,
                     )
                     y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                     attn = output["attn"]

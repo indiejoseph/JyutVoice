@@ -16,8 +16,6 @@ LANGUAGE_CODES = {
     "en": 2,
 }
 
-_lang_to_id = {lang: idx for idx, lang in enumerate(LANGUAGE_CODES.keys())}
-
 
 def text_to_sequence(text, lang: str, phone=None):
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
@@ -29,11 +27,10 @@ def text_to_sequence(text, lang: str, phone=None):
       List of integers corresponding to the symbols in the text
     """
 
-    _, phones, tones, word_pos, syllable_pos = clean_text(
+    _, phones, tones, word_pos, syllable_pos, lang_ids = clean_text(
         text, lang=lang, phoneme=phone, padding=True
     )
     phone_token_ids = cleaned_text_to_sequence(phones)
-    lang_ids = [_lang_to_id[lang]] * len(phone_token_ids)
 
     return phone_token_ids, tones, word_pos, syllable_pos, lang_ids
 

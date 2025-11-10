@@ -9,6 +9,7 @@ from jyutvoice.utils.model import (
     generate_path,
     duration_loss,
 )
+from jyutvoice.utils.mask import make_pad_mask
 import jyutvoice.utils.monotonic_align as monotonic_align
 from jyutvoice.models.baselightningmodule import BaseLightningClass
 
@@ -36,6 +37,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self.use_precomputed_durations = use_precomputed_durations
         self.n_feats = encoder.n_feats
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
+        self.output_size = output_size
 
         if freeze_decoder:
             self._freeze_decoder()
@@ -96,6 +98,8 @@ class JyutVoiceTTS(BaseLightningClass):
         word_pos,
         syllable_pos,
         spk_embed,
+        prompt_h=None,
+        prompt_feat=None,
         n_timesteps=10,
         temperature=1.0,
         length_scale=1.0,
@@ -111,6 +115,7 @@ class JyutVoiceTTS(BaseLightningClass):
                 shape: (batch_size, max_text_length)
             x_lengths (torch.Tensor): lengths of texts in batch.
                 shape: (batch_size,)
+                shape: (batch_size,)
             lang (torch.Tensor): language tokens.
                 shape: (batch_size, max_text_length)
             tone (torch.Tensor): tone tokens.
@@ -119,9 +124,13 @@ class JyutVoiceTTS(BaseLightningClass):
                 shape: (batch_size, max_text_length)
             syllable_pos (torch.Tensor): syllable position tokens.
                 shape: (batch_size, max_text_length)
-            n_timesteps (int): number of steps to use for reverse diffusion in decoder.
-            spk_embed (torch.Tensor): speaker embeddings.
+            prompt_h (torch.Tensor): prompt hidden states for conditioning.
+                shape: (batch_size, max_prompt_length, n_feats)
+            prompt_feat (torch.Tensor): prompt mel-spectrogram for conditioning.
+                shape: (batch_size, n_feats, max_prompt_length)
+             spk_embed (torch.Tensor): speaker embeddings.
                 shape: (batch_size, spk_emb_dim)
+            n_timesteps (int): number of steps to use for reverse diffusion in decoder.
             temperature (float, optional): controls variance of diffusion. Defaults to 1.0.
             length_scale (float, optional): controls speech pace.
                 Increase value to slow down generated speech and vice versa. Defaults to 1.0.
@@ -161,13 +170,11 @@ class JyutVoiceTTS(BaseLightningClass):
         attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
 
         # Align encoded text and get mu_y
-        # attn: (batch, 1, text_len, mel_len) → squeeze → (batch, text_len, mel_len)
-        # mu_x: (batch, n_feats, text_len)
-        # Compute: (batch, mel_len, text_len) @ (batch, text_len, n_feats) → (batch, mel_len, n_feats)
-        # Then transpose to (batch, n_feats, mel_len)
         mu_y = torch.matmul(
             attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2)
-        ).transpose(1, 2)
+        ).transpose(
+            1, 2
+        )  # B, n_feats, T_mel
         encoder_outputs = mu_y[:, :, :y_max_length]
 
         # Enforce batch_size=1 for inference (decoder requirement)
@@ -182,21 +189,35 @@ class JyutVoiceTTS(BaseLightningClass):
         spk_embed = F.normalize(spk_embed, dim=1)
         spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        # Initialize conditioning tensor: (1, n_feats, mel_len)
-        # During inference, we don't have prompt/prefix, so use zeros
-        cond = torch.zeros_like(mu_y)
+        if prompt_feat is not None and prompt_h is not None:
+            mu_y = torch.cat([prompt_h.transpose(1, 2), mu_y], dim=2)
+            mel_len1, mel_len2 = (
+                prompt_feat.shape[1],
+                mu_y.shape[2] - prompt_feat.shape[1],
+            )
+            conds = torch.zeros(
+                [1, mel_len1 + mel_len2, self.output_size], device=x.device
+            ).to(mu_y.dtype)
+            conds[:, :mel_len1] = prompt_feat
+            conds = conds.transpose(1, 2)
+
+            mask = (~make_pad_mask(torch.tensor([mel_len1 + mel_len2]))).to(conds.dtype)
+        else:
+            mel_len1 = 0
+            conds = torch.zeros_like(mu_y).to(mu_y.dtype)
+            mask = (~make_pad_mask(y_lengths)).to(mu_y.dtype)
 
         # Decoder forward pass
         decoder_outputs, _ = self.decoder(
             mu=mu_y,
-            mask=y_mask,
+            mask=mask.unsqueeze(1),
             spks=spk_embed,
-            cond=cond,
+            cond=conds,
             n_timesteps=n_timesteps,
             temperature=temperature,
             streaming=False,
         )
-        decoder_outputs = decoder_outputs[:, :, :y_max_length]
+        decoder_outputs = decoder_outputs[:, :, mel_len1:]
 
         t = (dt.datetime.now() - t).total_seconds()
         rtf = t * 24000 / (decoder_outputs.shape[-1] * 480)

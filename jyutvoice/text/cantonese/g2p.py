@@ -160,7 +160,9 @@ def g2p(
         len(phones) == len(tones) == len(word_pos) == len(syllable_pos)
     ), "Phones, tones, word positions, and syllable positions must have the same length."
 
-    return phones, tones, word2ph, word_pos, syllable_pos
+    lang_ids = [0] * len(phones)  # 0 for Cantonese
+
+    return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
 
 
 if __name__ == "__main__":

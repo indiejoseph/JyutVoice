@@ -38,7 +38,7 @@ def split_text(text: str) -> List[Tuple[str, bool]]:
 
 
 def g2p(
-    text: str, lang: str = "zh", padding: bool = True
+    text: str, phoneme=None, padding: bool = True, lang: str = "yue"
 ) -> Tuple[List[str], List[int], List[int], List[int], List[int]]:
     """
     Grapheme to phoneme conversion for multilingual text.
@@ -52,6 +52,9 @@ def g2p(
     Returns:
         phones, tones, word2ph, word_pos, syllable_pos, lang
     """
+    if phoneme != None:
+        raise NotImplementedError("Phoneme input not supported for multilingual G2P.")
+
     segments = split_text(text)
     all_phones = []
     all_tones = []
@@ -66,24 +69,24 @@ def g2p(
             continue
         if is_chinese:
             if lang == "yue":
-                phones, tones, word2ph, word_pos, syllable_pos = g2p_yue(
+                phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_yue(
                     chunk, padding=False
                 )
-                all_lang.extend([0] * len(phones))
+                all_lang.extend(lang_ids)
             elif lang == "zh":
-                phones, tones, word2ph, word_pos, syllable_pos = g2p_zh(
+                phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_zh(
                     chunk, padding=False
                 )
-                all_lang.extend([1] * len(phones))
+                all_lang.extend(lang_ids)
             else:
                 raise ValueError(
                     f"Invalid lang '{lang}' for Chinese. Use 'yue' or 'zh'."
                 )
         else:
-            phones, tones, word2ph, word_pos, syllable_pos = g2p_en(
+            phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_en(
                 chunk, padding=False
             )
-            all_lang.extend([2] * len(phones))
+            all_lang.extend(lang_ids)
 
         # Append to global lists
         all_phones.extend(phones)
@@ -102,8 +105,9 @@ def g2p(
         all_word2ph = [1] + all_word2ph + [1]
         all_word_pos = [0] + all_word_pos + [0]
         all_syllable_pos = [0] + all_syllable_pos + [0]
+        all_lang = [0] + all_lang + [0]
 
-    return all_phones, all_tones, all_word2ph, all_word_pos, all_syllable_pos
+    return all_phones, all_tones, all_word2ph, all_word_pos, all_syllable_pos, all_lang
 
 
 if __name__ == "__main__":

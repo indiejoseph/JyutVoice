@@ -2,6 +2,7 @@ import re
 from jyutvoice.text.mandarin.g2p import g2p as mandarin_g2p
 from jyutvoice.text.cantonese.g2p import g2p as cantonese_g2p
 from jyutvoice.text.english.g2p import g2p as english_g2p
+from jyutvoice.text.multilingual import g2p as multilingual_g2p
 from jyutvoice.text.symbols import punctuations
 
 rep_map = {
@@ -55,20 +56,30 @@ def replace_punctuation(text: str, lang="yue") -> str:
     pattern = re.compile("|".join(re.escape(p) for p in rep_map.keys()))
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
     # Keep only Chinese characters and punctuation
-    if lang != "en":
-        replaced_text = "".join(
-            [
-                text
-                for text in replaced_text
-                if (is_chinese(text) or text in punctuations) and not text.isspace()
-            ]
-        )
-    elif lang == "en":
+    if lang == "en":
         replaced_text = "".join(
             [
                 text
                 for text in replaced_text
                 if (text.isalpha() or text in punctuations) and not text.isspace()
+            ]
+        )
+    elif lang == "multilingual":
+        # Keep Chinese characters, English letters, and punctuation
+        replaced_text = "".join(
+            [
+                text
+                for text in replaced_text
+                if (is_chinese(text) or text.isalpha() or text in punctuations)
+                and not text.isspace()
+            ]
+        )
+    elif lang in ["yue", "zh"]:
+        replaced_text = "".join(
+            [
+                text
+                for text in replaced_text
+                if (is_chinese(text) or text in punctuations) and not text.isspace()
             ]
         )
     else:
@@ -93,13 +104,16 @@ def clean_text(text: str, lang: str = "yue", phoneme=None, padding=True):
         g2p = mandarin_g2p
     elif lang == "en":
         g2p = english_g2p
+    elif lang == "multilingual":
+        g2p = multilingual_g2p
     else:
         raise ValueError(f"Language {lang} not supported for text cleaning.")
 
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(
+    phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p(
         norm_text, phoneme, padding=padding
     )
-    return norm_text, phones, tones, word_pos, syllable_pos
+
+    return norm_text, phones, tones, word_pos, syllable_pos, lang_ids
 
 
 if __name__ == "__main__":

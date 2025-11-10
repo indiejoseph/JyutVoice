@@ -375,7 +375,7 @@ class TextEncoder(nn.Module):
         encoder_params,
         duration_predictor_params,
         n_vocab,
-        n_lang,
+        n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
         n_tone=7,  # PAD + 6 tones
     ):
         super().__init__()

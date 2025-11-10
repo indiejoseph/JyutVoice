@@ -187,40 +187,6 @@ def distribute_phone(n_phone, n_word):
     return phones_per_word
 
 
-def get_syllable_positions(phones: list) -> list:
-    """Assign syllable positions to phonemes: 0=padding, 1=onset, 2=nucleus, 3=coda"""
-    # English vowels (nuclei)
-    vowels = {
-        "aa",
-        "ae",
-        "ah",
-        "ao",
-        "aw",
-        "ay",
-        "eh",
-        "er",
-        "ey",
-        "ih",
-        "iy",
-        "ow",
-        "oy",
-        "uh",
-        "uw",
-    }
-
-    positions = []
-    for i, phone in enumerate(phones):
-        if phone == "_":  # Padding
-            positions.append(0)
-        elif phone in vowels:  # Vowel = nucleus
-            positions.append(2)
-        else:  # Consonant
-            prev_phone = phones[i - 1] if i > 0 else None
-            positions.append(3 if prev_phone in vowels else 1)
-
-    return positions
-
-
 def text_to_words(text):
     tokens = tokenizer.tokenize(text)
     words = []
@@ -251,6 +217,7 @@ def text_to_words(text):
 def g2p(text, phoneme=None, padding=True):
     phones = []
     tones = []
+    syllable_pos = []
     word_pos = []
     ws_labels = []
     phone_len = []
@@ -292,6 +259,20 @@ def g2p(text, phoneme=None, padding=True):
         phone_len.append(len(temp_phones))
         ws_labels.append(1)  # English words are always single units
 
+        # Build syllable_pos for this word
+        temp_syllable_pos = []
+        if len(temp_phones) == 1 and temp_phones[0] in punctuations:
+            temp_syllable_pos = [0]
+        else:
+            for j in range(len(temp_phones)):
+                if j == 0:
+                    temp_syllable_pos.append(1)
+                elif j == len(temp_phones) - 1:
+                    temp_syllable_pos.append(3)
+                else:
+                    temp_syllable_pos.append(2)
+        syllable_pos += temp_syllable_pos
+
     word2ph = []
     for token, pl in zip(words, phone_len):
         word_len = len(token)
@@ -312,9 +293,6 @@ def g2p(text, phoneme=None, padding=True):
             word_pos.extend([ws_label] * num_phones)
             idx += 1
 
-    # Generate syllable positions for phonemes
-    syllable_pos = get_syllable_positions(phones)
-
     if padding:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
@@ -322,7 +300,9 @@ def g2p(text, phoneme=None, padding=True):
         syllable_pos = [0] + syllable_pos + [0]
         word2ph = [1] + word2ph + [1]
 
-    return phones, tones, word2ph, word_pos, syllable_pos
+    lang_ids = [2] * len(phones)  # 2 for English
+
+    return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
 
 
 if __name__ == "__main__":
