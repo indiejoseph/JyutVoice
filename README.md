@@ -150,26 +150,6 @@ For precise Cantonese pronunciation, you can provide phonetic transcription:
 python infer.py --text "呢隻嘢真係好勁呀。" --lang yue --phone "ni1 zek3 je5 zan1 hai6 hou2 kem5 aa3 ." --ref_audio reference.wav --output output.wav
 ```
 
-### Batch Processing
-
-For multiple texts, create a simple script:
-
-```python
-#!/usr/bin/env python3
-import subprocess
-
-texts = [
-    "Hello world",
-    "你好世界", 
-    "呢個係測試"
-]
-
-for i, text in enumerate(texts):
-    lang = "en" if text.isascii() else ("yue" if any(ord(c) > 127 for c in text) else "zh")
-    cmd = f"python infer.py --text '{text}' --lang {lang} --ref_audio reference.wav --output output_{i}.wav"
-    subprocess.run(cmd, shell=True)
-```
-
 ### Model Configuration
 
 The inference script uses these default model paths (can be overridden):
@@ -309,6 +289,10 @@ jyutvoice-tts/
 - [Matcha-TTS](https://github.com/shivammehta25/Matcha-TTS) - Text encoder
 - [PyTorch Lightning](https://lightning.ai/) - Training framework
 
+## Disclaimer
+
+This work builds upon code from Matcha-TTS and CosyVoice with modified linguistic features. The content provided above is for academic and research purposes only and is intended to demonstrate technical capabilities in text-to-speech synthesis.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file
@@ -321,6 +305,43 @@ MIT License - see [LICENSE](LICENSE) file
   author={Joseph Cheng},
   year={2025},
   url={https://github.com/indiejoseph/jyutvoice-tts}
+}
+
+@inproceedings{mehta2024matcha,
+  title={Matcha-{TTS}: A fast {TTS} architecture with conditional flow matching},
+  author={Mehta, Shivam and Tu, Ruibo and Beskow, Jonas and Sz{\'e}kely, {\'E}va and Henter, Gustav Eje},
+  booktitle={Proc. ICASSP},
+  year={2024}
+}
+
+@article{du2024cosyvoice,
+  title={Cosyvoice: A scalable multilingual zero-shot text-to-speech synthesizer based on supervised semantic tokens},
+  author={Du, Zhihao and Chen, Qian and Zhang, Shiliang and Hu, Kai and Lu, Heng and Yang, Yexin and Hu, Hangrui and Zheng, Siqi and Gu, Yue and Ma, Ziyang and others},
+  journal={arXiv preprint arXiv:2407.05407},
+  year={2024}
+}
+
+@article{du2024cosyvoice,
+  title={Cosyvoice 2: Scalable streaming speech synthesis with large language models},
+  author={Du, Zhihao and Wang, Yuxuan and Chen, Qian and Shi, Xian and Lv, Xiang and Zhao, Tianyu and Gao, Zhifu and Yang, Yexin and Gao, Changfeng and Wang, Hui and others},
+  journal={arXiv preprint arXiv:2412.10117},
+  year={2024}
+}
+
+@article{du2025cosyvoice,
+  title={CosyVoice 3: Towards In-the-wild Speech Generation via Scaling-up and Post-training},
+  author={Du, Zhihao and Gao, Changfeng and Wang, Yuxuan and Yu, Fan and Zhao, Tianyu and Wang, Hao and Lv, Xiang and Wang, Hui and Shi, Xian and An, Keyu and others},
+  journal={arXiv preprint arXiv:2505.17589},
+  year={2025}
+}
+
+@inproceedings{lyu2025build,
+  title={Build LLM-Based Zero-Shot Streaming TTS System with Cosyvoice},
+  author={Lyu, Xiang and Wang, Yuxuan and Zhao, Tianyu and Wang, Hao and Liu, Huadai and Du, Zhihao},
+  booktitle={ICASSP 2025-2025 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  pages={1--2},
+  year={2025},
+  organization={IEEE}
 }
 ```
 
