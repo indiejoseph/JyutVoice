@@ -2,6 +2,7 @@
 n_feats: 80
 p_dropout: 0.1
 filter_channels_dp: 256
+gin_channels: 256
 token_frame_rate: 25
 token_mel_ratio: 2
 # stream related params
@@ -96,6 +97,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
+  gin_channels: !ref <gin_channels>
   pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4
