@@ -16,6 +16,7 @@ n_fft: 1920
 f_min: 0
 f_max: 8000
 add_blank: true
+spk_embed_dim: 192
 
 hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
   in_channels: 80
@@ -65,6 +66,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_vocab: 97
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
+    spk_embed_dim: !ref <spk_embed_dim>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
@@ -93,7 +95,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
   freeze_decoder: true
   output_size: 80
-  spk_embed_dim: 192
+  spk_embed_dim: !ref <spk_embed_dim>
   pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4

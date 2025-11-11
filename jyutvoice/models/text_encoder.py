@@ -377,6 +377,7 @@ class TextEncoder(nn.Module):
         n_vocab,
         n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
         n_tone=7,  # PAD + 6 tones
+        spk_embed_dim=192,
     ):
         super().__init__()
         self.encoder_type = encoder_type
@@ -388,6 +389,7 @@ class TextEncoder(nn.Module):
         self.n_layers = encoder_params.n_layers
         self.kernel_size = encoder_params.kernel_size
         self.p_dropout = encoder_params.p_dropout
+        self.spk_embed_dim = spk_embed_dim
 
         self.emb = torch.nn.Embedding(n_vocab, self.n_channels)
         torch.nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
@@ -415,16 +417,16 @@ class TextEncoder(nn.Module):
             self.prenet = lambda x, x_mask: x
 
         self.encoder = Encoder(
-            self.n_channels,
+            self.n_channels + spk_embed_dim,
             self.filter_channels,
             self.n_heads,
             self.n_layers,
             self.kernel_size,
             self.p_dropout,
         )
-        self.proj_m = torch.nn.Conv1d(self.n_channels, self.n_feats, 1)
+        self.proj_m = torch.nn.Conv1d(self.n_channels + spk_embed_dim, self.n_feats, 1)
         self.proj_w = DurationPredictor(
-            self.n_channels,
+            self.n_channels + spk_embed_dim,
             duration_predictor_params.filter_channels_dp,
             duration_predictor_params.kernel_size,
             duration_predictor_params.p_dropout,
@@ -434,7 +436,7 @@ class TextEncoder(nn.Module):
         """Get the output size of the encoder"""
         return self.n_feats
 
-    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos):
+    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed):
         """Run forward pass to the transformer based encoder and duration predictor
 
         Args:
@@ -450,6 +452,8 @@ class TextEncoder(nn.Module):
                 shape: (batch_size, max_text_length)
             syllable_pos (torch.Tensor): syllable positions for the text input
                 shape: (batch_size, max_text_length)
+            spk_embed (torch.Tensor): speaker embedding
+                shape: (batch_size, spk_embed_dim)
         Returns:
             mu (torch.Tensor): average output of the encoder
                 shape: (batch_size, n_feats, max_text_length)
@@ -469,6 +473,7 @@ class TextEncoder(nn.Module):
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
         x = self.prenet(x, x_mask)
+        x = torch.cat([x, spk_embed.unsqueeze(-1).repeat(1, 1, x.shape[-1])], dim=1)
         x = self.encoder(x, x_mask)
         mu = self.proj_m(x) * x_mask
 
@@ -513,8 +518,12 @@ if __name__ == "__main__":
     tone = torch.randint(0, 7, (2, 10))
     word_pos = torch.randint(0, 4, (2, 10))
     syllable_pos = torch.randint(0, 4, (2, 10))
+    lang = torch.randint(0, 3, (2, 10))
+    spk_embed = torch.randn(2, 192)
 
-    mu, logw, x_mask = text_encoder(x, x_lengths, tone, word_pos, syllable_pos)
+    mu, logw, x_mask = text_encoder(
+        x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
+    )
 
     print(mu.shape)
     print(logw.shape)

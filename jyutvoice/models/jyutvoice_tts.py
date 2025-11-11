@@ -156,7 +156,7 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
 
         w = torch.exp(logw) * x_mask
@@ -267,7 +267,7 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
         y_max_length = y.shape[-1]
 
