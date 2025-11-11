@@ -109,8 +109,8 @@ class JyutVoiceTTS(BaseLightningClass):
         word_pos,
         syllable_pos,
         spk_embed,
+        prompt_feat,
         prompt_h=None,
-        prompt_feat=None,
         n_timesteps=10,
         temperature=1.0,
         length_scale=1.0,
@@ -135,11 +135,11 @@ class JyutVoiceTTS(BaseLightningClass):
                 shape: (batch_size, max_text_length)
             syllable_pos (torch.Tensor): syllable position tokens.
                 shape: (batch_size, max_text_length)
-            prompt_h (torch.Tensor): prompt hidden states for conditioning.
-                shape: (batch_size, max_prompt_length, n_feats)
             prompt_feat (torch.Tensor): prompt mel-spectrogram for conditioning.
                 shape: (batch_size, n_feats, max_prompt_length)
-             spk_embed (torch.Tensor): speaker embeddings.
+            prompt_h (torch.Tensor): prompt hidden states for conditioning.
+                shape: (batch_size, max_prompt_length, n_feats)
+            spk_embed (torch.Tensor): speaker embeddings.
                 shape: (batch_size, spk_emb_dim)
             n_timesteps (int): number of steps to use for reverse diffusion in decoder.
             temperature (float, optional): controls variance of diffusion. Defaults to 1.0.
@@ -170,10 +170,7 @@ class JyutVoiceTTS(BaseLightningClass):
         spk_embed_proj = self.spk_embed_affine_layer(spk_embed)
 
         # Compute style conditioning
-        if prompt_feat is not None:
-            c = self.style_encoder(prompt_feat, None)
-        else:
-            c = spk_embed
+        c = self.style_encoder(prompt_feat, None)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(
@@ -260,8 +257,8 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
-        ref_mel,
-        ref_mel_lengths,
+        z,
+        z_lengths,
         durations=None,
     ):
         """
@@ -281,19 +278,15 @@ class JyutVoiceTTS(BaseLightningClass):
             syllable_pos: Syllable position information (B, T_text)
             spk_embed: Speaker embedding (B, spk_embed_dim)
             decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_mel, n_feats)
-            ref_mel: Reference mel-spectrogram for style extraction (B, n_mel_channels, T_ref)
-            ref_mel_lengths: Lengths of reference mel-spectrograms (B,)
+            z: Reference mel-spectrogram for style extraction (B, n_mel_channels, T_ref)
+            z_lengths: Lengths of reference mel-spectrograms (B,)
             durations: Optional ground truth durations for teacher forcing
         """
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         # compute style conditioning
-        ref_mask = (
-            sequence_mask(ref_mel_lengths, ref_mel.shape[-1])
-            .unsqueeze(1)
-            .to(ref_mel.dtype)
-        )
-        c = self.style_encoder(ref_mel, ref_mask)
+        ref_mask = sequence_mask(z_lengths, z.shape[-1]).unsqueeze(1).to(z.dtype)
+        c = self.style_encoder(z, ref_mask)
         mu_x, logw, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, c
         )

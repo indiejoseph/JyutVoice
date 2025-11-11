@@ -67,7 +67,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_vocab: 97
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
-    spk_embed_dim: !ref <spk_embed_dim>
+    spk_embed_dim: !ref <gin_channels>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
