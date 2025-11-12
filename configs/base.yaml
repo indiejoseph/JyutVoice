@@ -75,6 +75,14 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_layers: 4
     global_dim: 256
 
+  style_encoder: !new:jyutvoice.models.reference_encoder.MelStyleEncoder
+    n_mel_channels: !ref <n_feats>
+    style_hidden: 128
+    style_vector_dim: !ref <gin_channels>
+    style_kernel_size: 5
+    style_head: 2
+    dropout: 0.1
+
   noise_scheduler: !new:jyutvoice.models.scheduler.LinearNoiseSchedule
     num_train_timesteps: 1000
     beta_start: 1e-4

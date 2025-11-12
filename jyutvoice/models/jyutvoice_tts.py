@@ -20,6 +20,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self,
         encoder,
         ldpm,
+        style_encoder,
         decoder,
         output_size=80,
         spk_embed_dim=192,
@@ -49,14 +50,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
 
         # style encoder to extract global prosody vector
-        self.style_encoder = MelStyleEncoder(
-            n_mel_channels=self.output_size,
-            style_hidden=128,
-            style_vector_dim=gin_channels,
-            style_kernel_size=5,
-            style_head=2,
-            dropout=0.1,
-        )
+        self.style_encoder = style_encoder
 
         # linear map from style vector -> LDPM global conditioning dim
         self.style_to_global = torch.nn.Linear(gin_channels, 256)
