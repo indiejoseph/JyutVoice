@@ -4,6 +4,7 @@ The benefit of this abstraction is that all the logic outside of model definitio
 """
 
 import inspect
+import math
 from abc import ABC
 from typing import Any, Dict
 import wandb
@@ -120,6 +121,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
+        step = float(self.global_step)
 
         # Log current learning rate
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
@@ -171,11 +173,25 @@ class BaseLightningClass(LightningModule, ABC):
             batch_size=batch["x"].shape[0],
         )
 
+        # ----------------------------
+        #  LDPM weighting schedule
+        # ----------------------------
+        ldpm_cap = 0.5  # max weight
+        ldpm_warmup = 5_000  # steps before LDPM starts
+        ldpm_ramp = 20_000  # ramp length
+        if step < ldpm_warmup:
+            w_ldpm = 0.0
+        else:
+            p = min(1.0, (step - ldpm_warmup) / ldpm_ramp)
+            w_ldpm = ldpm_cap * (0.5 * (1 - math.cos(math.pi * p)))  # cosine ramp
+
         # total_loss = sum(loss_dict.values())
-        # total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-        #     loss_dict["diff_loss"] * 0.2
-        # )
-        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
+
+        total_loss = (
+            loss_dict["dur_loss"]
+            + loss_dict["prior_loss"]
+            + w_ldpm * loss_dict.get("ldpm_loss", 0.0)
+        )
         self.log(
             "loss/train",
             total_loss,
@@ -220,10 +236,10 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        # total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-        #     loss_dict["diff_loss"] * 0.2
-        # )
-        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
+
+        total_loss = (
+            loss_dict["dur_loss"] + loss_dict["prior_loss"] + loss_dict["ldpm_loss"]
+        )
         self.log(
             "loss/val",
             total_loss,
