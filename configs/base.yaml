@@ -69,11 +69,12 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_tone: 7 # pad + 6 tones
     spk_embed_dim: !ref <n_feats> # after linear projection
 
-  ldpm: !new:jyutvoice.models.ldpm.LatentDiffusionProsodyModel
-    n_feats: !ref <n_feats>
+  ldpm: !new:jyutvoice.models.ldpm.ProsodyDiffusionSystem
+    latent_dim: !ref <n_feats>
     hidden_dim: 256
-    n_layers: 4
-    global_dim: 256
+    cond_local_dim: !ref <n_feats>
+    cond_global_dim: 256
+    timesteps: 50
 
   style_encoder: !new:jyutvoice.models.reference_encoder.MelStyleEncoder
     n_mel_channels: !ref <n_feats>
@@ -81,7 +82,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     style_vector_dim: !ref <gin_channels>
     style_kernel_size: 5
     style_head: 2
-    dropout: 0.1
+    dropout: 0.25
 
   noise_scheduler: !new:jyutvoice.models.scheduler.LinearNoiseSchedule
     num_train_timesteps: 1000
@@ -156,6 +157,8 @@ trainer: !new:lightning.Trainer
   log_every_n_steps: 1
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
 
 callbacks:
   model_checkpoint:

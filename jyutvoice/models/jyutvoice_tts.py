@@ -146,6 +146,7 @@ class JyutVoiceTTS(BaseLightningClass):
         # extract global prosody vector g from prompt mel
         style_vec = self.style_encoder(prompt_feat.transpose(1, 2), None)
         g = self.style_to_global(style_vec)  # (B, 256)
+        g = F.normalize(g, dim=1)
 
         # text encoder -> phoneme-level μ_x, logw
         mu_x, logw, x_mask = self.encoder(
@@ -254,6 +255,7 @@ class JyutVoiceTTS(BaseLightningClass):
         ref_mask = sequence_mask(z_lengths, z.shape[-1]).unsqueeze(1).to(z.dtype)
         style_vec = self.style_encoder(z, ref_mask)
         g = self.style_to_global(style_vec)  # (B, 256)
+        g = F.normalize(g, dim=1)
 
         # text encoder: phoneme-level features
         mu_x, logw, x_mask = self.encoder(

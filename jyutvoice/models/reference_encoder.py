@@ -67,10 +67,7 @@ class MelStyleEncoder(nn.Module):
             self.hidden_dim, self.n_head, self.dropout, batch_first=True
         )
 
-        self.fc = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.out_dim),
-            nn.LayerNorm(self.out_dim),
-        )
+        self.fc = nn.Linear(self.hidden_dim, self.out_dim)
 
     def temporal_avg_pool(self, x, mask=None):
         if mask is None:
