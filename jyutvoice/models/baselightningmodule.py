@@ -135,6 +135,7 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
             batch_size=batch["x"].shape[0],
         )
+
         self.log(
             "step",
             float(self.global_step),
@@ -144,6 +145,7 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
             batch_size=batch["x"].shape[0],
         )
+
         self.log(
             "sub_loss/train_dur_loss",
             loss_dict["dur_loss"],
@@ -173,7 +175,7 @@ class BaseLightningClass(LightningModule, ABC):
         )
         self.log(
             "sub_loss/train_ldpm_loss",
-            loss_dict.get("ldpm_loss", 0.0),
+            loss_dict["ldpm_loss"],
             on_step=True,
             on_epoch=True,
             logger=True,
@@ -185,7 +187,7 @@ class BaseLightningClass(LightningModule, ABC):
         #  LDPM weighting schedule
         # ----------------------------
         ldpm_cap = 0.5  # max weight
-        ldpm_warmup = 5_000  # steps before LDPM starts
+        ldpm_warmup = 2_000  # steps before LDPM starts
         ldpm_ramp = 20_000  # ramp length
         if step < ldpm_warmup:
             w_ldpm = 0.0
@@ -197,7 +199,7 @@ class BaseLightningClass(LightningModule, ABC):
             "w_ldpm",
             w_ldpm,
             on_step=True,
-            prog_bar=False,
+            prog_bar=True,
             logger=True,
             sync_dist=True,
             batch_size=batch["x"].shape[0],
@@ -210,7 +212,6 @@ class BaseLightningClass(LightningModule, ABC):
             + loss_dict["prior_loss"]
             + w_ldpm * loss_dict.get("ldpm_loss", 0.0)
         )
-
         self.log(
             "loss/train",
             total_loss,
