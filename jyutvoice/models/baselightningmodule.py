@@ -82,6 +82,7 @@ class BaseLightningClass(LightningModule, ABC):
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]
         y, y_lengths = batch["y"], batch["y_lengths"]
+        z, z_lengths = batch["z"], batch["z_lengths"]
         lang, tone, word_pos, syllable_pos = (
             batch["lang"],
             batch["tone"],
@@ -102,6 +103,8 @@ class BaseLightningClass(LightningModule, ABC):
             syllable_pos=syllable_pos,
             spk_embed=spk_embed,
             decoder_h=decoder_h,
+            z=z,
+            z_lengths=z_lengths,
             durations=batch.get("durations", None),
         )
         return {
@@ -169,9 +172,10 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-            loss_dict["diff_loss"] * 0.2
-        )
+        # total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
+        #     loss_dict["diff_loss"] * 0.2
+        # )
+        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
         self.log(
             "loss/train",
             total_loss,
@@ -216,9 +220,10 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-            loss_dict["diff_loss"] * 0.2
-        )
+        # total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
+        #     loss_dict["diff_loss"] * 0.2
+        # )
+        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
         self.log(
             "loss/val",
             total_loss,
@@ -271,6 +276,7 @@ class BaseLightningClass(LightningModule, ABC):
                         break
                     x = one_batch["x"][i].unsqueeze(0).to(self.device)
                     x_lengths = one_batch["x_lengths"][i].unsqueeze(0).to(self.device)
+                    y = one_batch["y"][i].unsqueeze(0).to(self.device)
                     lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
                     tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
                     word_pos = one_batch["word_pos"][i].unsqueeze(0).to(self.device)
@@ -290,6 +296,7 @@ class BaseLightningClass(LightningModule, ABC):
                         word_pos[:, : x_lengths.item()],
                         syllable_pos[:, : x_lengths.item()],
                         spk_embed=spk_embed,
+                        prompt_feat=y,
                         n_timesteps=10,
                     )
                     y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]

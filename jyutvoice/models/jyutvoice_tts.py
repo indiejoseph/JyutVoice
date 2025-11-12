@@ -19,28 +19,36 @@ class JyutVoiceTTS(BaseLightningClass):
     def __init__(
         self,
         encoder,
+        ldpm,
         decoder,
         output_size=80,
         spk_embed_dim=192,
         gin_channels=256,
+        freeze_encoder=False,
         freeze_decoder=False,
         use_precomputed_durations=False,
         optimizer=None,
         scheduler=None,
         pretrain_path=None,
         warmup_steps=100,
+        noise_scheduler=None,
     ):
         super().__init__()
 
         self.save_hyperparameters(logger=False)
-
         self.encoder = encoder
         self.decoder = decoder
+        self.ldpm = ldpm
+        self.noise_scheduler = noise_scheduler
+
         self.use_precomputed_durations = use_precomputed_durations
         self.n_feats = encoder.n_feats
-        self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
         self.output_size = output_size
 
+        # speaker projection -> mel dimension
+        self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
+
+        # style encoder to extract global prosody vector
         self.style_encoder = MelStyleEncoder(
             n_mel_channels=self.output_size,
             style_hidden=128,
@@ -50,21 +58,35 @@ class JyutVoiceTTS(BaseLightningClass):
             dropout=0.1,
         )
 
+        # linear map from style vector -> LDPM global conditioning dim
+        self.style_to_global = torch.nn.Linear(gin_channels, 256)
+
+        if freeze_encoder:
+            self._freeze_encoder()
         if freeze_decoder:
             self._freeze_decoder()
-
-        # Load pretrained weights if provided
         if pretrain_path:
             self.load_pretrain(pretrain_path)
 
+    # ------------------------------
+    # Freeze helpers
+    # ------------------------------
+    def _freeze_encoder(self):
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+        self.encoder.eval()
+
     def _freeze_decoder(self):
-        for param in self.decoder.parameters():
-            param.requires_grad = False
-        for param in self.spk_embed_affine_layer.parameters():
-            param.requires_grad = False
+        for p in self.decoder.parameters():
+            p.requires_grad = False
+        for p in self.spk_embed_affine_layer.parameters():
+            p.requires_grad = False
         self.decoder.eval()
         self.spk_embed_affine_layer.eval()
 
+    # ------------------------------
+    # Pretrain loading
+    # ------------------------------
     def load_pretrain(self, pretrain_path):
         """
         Load pretrained weights from a checkpoint file.
@@ -99,6 +121,9 @@ class JyutVoiceTTS(BaseLightningClass):
 
         return incompatible_keys
 
+    # ------------------------------
+    # Inference
+    # ------------------------------
     @torch.inference_mode()
     def synthesise(
         self,
@@ -114,94 +139,56 @@ class JyutVoiceTTS(BaseLightningClass):
         n_timesteps=10,
         temperature=1.0,
         length_scale=1.0,
+        use_ldpm=True,
+        ldpm_steps=50,
+        ldpm_temp=1.0,
     ):
-        """
-        Generates mel-spectrogram from text. Returns:
-            1. encoder outputs
-            2. decoder outputs
-            3. generated alignment
+        t0 = dt.datetime.now()
 
-        Args:
-            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
-                shape: (batch_size, max_text_length)
-            x_lengths (torch.Tensor): lengths of texts in batch.
-                shape: (batch_size,)
-                shape: (batch_size,)
-            lang (torch.Tensor): language tokens.
-                shape: (batch_size, max_text_length)
-            tone (torch.Tensor): tone tokens.
-                shape: (batch_size, max_text_length)
-            word_pos (torch.Tensor): word position tokens.
-                shape: (batch_size, max_text_length)
-            syllable_pos (torch.Tensor): syllable position tokens.
-                shape: (batch_size, max_text_length)
-            prompt_feat (torch.Tensor): prompt mel-spectrogram for conditioning.
-                shape: (batch_size, n_feats, max_prompt_length)
-            prompt_h (torch.Tensor): prompt hidden states for conditioning.
-                shape: (batch_size, max_prompt_length, n_feats)
-            spk_embed (torch.Tensor): speaker embeddings.
-                shape: (batch_size, spk_emb_dim)
-            n_timesteps (int): number of steps to use for reverse diffusion in decoder.
-            temperature (float, optional): controls variance of diffusion. Defaults to 1.0.
-            length_scale (float, optional): controls speech pace.
-                Increase value to slow down generated speech and vice versa. Defaults to 1.0.
-
-        Returns:
-            dict: {
-                "encoder_outputs": torch.Tensor, shape: (batch_size, n_feats, max_mel_length),
-                # Average mel spectrogram generated by the encoder
-                "decoder_outputs": torch.Tensor, shape: (batch_size, n_feats, max_mel_length),
-                # Refined mel spectrogram improved by the CFM
-                "attn": torch.Tensor, shape: (batch_size, max_text_length, max_mel_length),
-                # Alignment map between text and mel spectrogram
-                "mel": torch.Tensor, shape: (batch_size, n_feats, max_mel_length),
-                # Denormalized mel spectrogram
-                "mel_lengths": torch.Tensor, shape: (batch_size,),
-                # Lengths of mel spectrograms
-                "rtf": float,
-                # Real-time factor
-            }
-        """
-        # For RTF computation
-        t = dt.datetime.now()
-
-        # Project speaker embedding
+        # speaker & style conditioning
         spk_embed = F.normalize(spk_embed, dim=1)
-        spk_embed_proj = self.spk_embed_affine_layer(spk_embed)
+        spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        # Compute style conditioning
-        c = self.style_encoder(prompt_feat, None)
+        # extract global prosody vector g from prompt mel
+        style_vec = self.style_encoder(prompt_feat.transpose(1, 2), None)
+        g = self.style_to_global(style_vec)  # (B, 256)
 
-        # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
+        # text encoder -> phoneme-level μ_x, logw
         mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos, c
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
 
+        # durations -> attention
         w = torch.exp(logw) * x_mask
         w_ceil = torch.ceil(w) * length_scale
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
-        y_max_length = y_lengths.max()
-
-        # Using obtained durations `w` construct alignment map `attn`
-        y_mask = sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask.dtype)
+        y_max = y_lengths.max()
+        y_mask = sequence_mask(y_lengths, y_max).unsqueeze(1).to(x_mask.dtype)
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
         attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
 
-        # Align encoded text and get mu_y
+        # align to mel time
         mu_y = torch.matmul(
             attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # B, n_feats, T_mel
-        encoder_outputs = mu_y[:, :, :y_max_length]
+        ).transpose(1, 2)
+        encoder_outputs = mu_y[:, :, :y_max]
 
-        # Enforce batch_size=1 for inference (decoder requirement)
+        # ---------------------------------------------------
+        # Apply LDPM refinement (global prosody conditioning)
+        # ---------------------------------------------------
+        if use_ldpm and self.ldpm is not None and self.noise_scheduler is not None:
+            mu_y = self.ldpm.sample(
+                cond_local=mu_y,
+                cond_global=g,
+                scheduler=self.noise_scheduler,
+                n_steps=ldpm_steps,
+                noise_scale=ldpm_temp,
+            )
+
+        # prepare prompt/conditioning mel for flow decoder
         batch_size = x.size(0)
         if batch_size != 1:
-            raise ValueError(
-                f"synthesise() requires batch_size=1, got batch_size={batch_size}. "
-                "Please pass one sample at a time."
-            )
+            raise ValueError("synthesise() requires batch_size=1")
 
         if prompt_feat is not None and prompt_h is not None:
             mu_y = torch.cat([prompt_h.transpose(1, 2), mu_y], dim=2)
@@ -210,22 +197,23 @@ class JyutVoiceTTS(BaseLightningClass):
                 mu_y.shape[2] - prompt_feat.shape[1],
             )
             conds = torch.zeros(
-                [1, mel_len1 + mel_len2, self.output_size], device=x.device
-            ).to(mu_y.dtype)
+                [1, mel_len1 + mel_len2, self.output_size],
+                device=x.device,
+                dtype=mu_y.dtype,
+            )
             conds[:, :mel_len1] = prompt_feat
             conds = conds.transpose(1, 2)
-
             mask = (~make_pad_mask(torch.tensor([mel_len1 + mel_len2]))).to(conds.dtype)
         else:
             mel_len1 = 0
-            conds = torch.zeros_like(mu_y).to(mu_y.dtype)
+            conds = torch.zeros_like(mu_y)
             mask = (~make_pad_mask(y_lengths)).to(mu_y.dtype)
 
-        # Decoder forward pass
+        # flow decoder synthesis
         decoder_outputs, _ = self.decoder(
             mu=mu_y,
             mask=mask.unsqueeze(1),
-            spks=spk_embed_proj,
+            spks=spk_embed,
             cond=conds,
             n_timesteps=n_timesteps,
             temperature=temperature,
@@ -233,8 +221,8 @@ class JyutVoiceTTS(BaseLightningClass):
         )
         decoder_outputs = decoder_outputs[:, :, mel_len1:]
 
-        t = (dt.datetime.now() - t).total_seconds()
-        rtf = t * 24000 / (decoder_outputs.shape[-1] * 480)
+        t1 = (dt.datetime.now() - t0).total_seconds()
+        rtf = t1 * 24000 / (decoder_outputs.shape[-1] * 480)
 
         return {
             "encoder_outputs": encoder_outputs,
@@ -245,6 +233,9 @@ class JyutVoiceTTS(BaseLightningClass):
             "rtf": rtf,
         }
 
+    # ------------------------------
+    # Training
+    # ------------------------------
     def forward(
         self,
         x,
@@ -261,104 +252,82 @@ class JyutVoiceTTS(BaseLightningClass):
         z_lengths,
         durations=None,
     ):
-        """
-        Computes 3 losses:
-            1. duration loss: loss between predicted token durations and those extracted by Monotonic Alignment Search (MAS).
-            2. prior loss: the loss between the hidden state of CosyVoice2's flow encoder and the output of the text encoder.
-            3. flow matching loss: loss between mel-spectrogram and decoder outputs.
+        # speaker embedding
+        spk_embed = F.normalize(spk_embed, dim=1)
+        spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        Args:
-            x: Input token IDs (B, T_text)
-            x_lengths: Lengths of input token sequences (B,)
-            y: Target mel-spectrograms (B, n_mel_channels, T_mel)
-            y_lengths: Lengths of target mel-spectrograms (B,)
-            lang: Language information (B, T_text)
-            tone: Tone information (B, T_text)
-            word_pos: Word position information (B, T_text)
-            syllable_pos: Syllable position information (B, T_text)
-            spk_embed: Speaker embedding (B, spk_embed_dim)
-            decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_mel, n_feats)
-            z: Reference mel-spectrogram for style extraction (B, n_mel_channels, T_ref)
-            z_lengths: Lengths of reference mel-spectrograms (B,)
-            durations: Optional ground truth durations for teacher forcing
-        """
-
-        # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        # compute style conditioning
+        # style / global prosody vector
         ref_mask = sequence_mask(z_lengths, z.shape[-1]).unsqueeze(1).to(z.dtype)
-        c = self.style_encoder(z, ref_mask)
-        mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos, c
-        )
-        y_max_length = y.shape[-1]
+        style_vec = self.style_encoder(z, ref_mask)
+        g = self.style_to_global(style_vec)  # (B, 256)
 
-        y_mask = sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask)
+        # text encoder: phoneme-level features
+        mu_x, logw, x_mask = self.encoder(
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
+        )
+        y_max = y.shape[-1]
+        y_mask = sequence_mask(y_lengths, y_max).unsqueeze(1).to(x_mask)
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
 
+        # alignment
         if self.use_precomputed_durations:
             attn = generate_path(durations.squeeze(1), attn_mask.squeeze(1))
         else:
-            # Use MAS to find most likely alignment `attn` between text tokens and decoder_h
-            # The text encoder is trained to map text → decoder_h space, so align to decoder_h
             with torch.no_grad():
                 const = -0.5 * math.log(2 * math.pi) * self.n_feats
-                factor = -0.5 * torch.ones(
-                    mu_x.shape, dtype=mu_x.dtype, device=mu_x.device
-                )
-                # Use decoder_h (flow encoder hidden states) for alignment computation
-                # decoder_h: (batch, T_text, n_feats) → transpose to (batch, n_feats, T_text)
+                factor = -0.5 * torch.ones_like(mu_x)
                 h = decoder_h.transpose(1, 2)
-                h_square = torch.matmul(factor.transpose(1, 2), (h**2))
-                h_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), h)
-                mu_square = torch.sum(factor * (mu_x**2), 1).unsqueeze(-1)
-                log_prior = h_square - h_mu_double + mu_square + const
+                h_sq = torch.matmul(factor.transpose(1, 2), h**2)
+                h_mu = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), h)
+                mu_sq = torch.sum(factor * (mu_x**2), 1).unsqueeze(-1)
+                log_prior = h_sq - h_mu + mu_sq + const
+                attn = monotonic_align.maximum_path(
+                    log_prior, attn_mask.squeeze(1)
+                ).detach()
 
-                attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
-                attn = attn.detach()  # b, t_text, T_text (decoder_h_len)
-
-        # Compute loss between predicted log-scaled durations and those obtained from MAS
-        # refered to as prior loss in the paper
+        # duration loss
         logw_ = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
         dur_loss = duration_loss(logw, logw_, x_lengths)
 
-        # NOTE unified training, static_chunk_size > 0 or = 0
-        streaming = True if random.random() < 0.5 else False
+        # align to mel latent
+        mu_y = torch.matmul(attn.transpose(1, 2), mu_x.transpose(1, 2)).transpose(1, 2)
 
-        # xvec projection
-        spk_embed = F.normalize(spk_embed, dim=1)
-        spk_embed_proj = self.spk_embed_affine_layer(spk_embed)
+        # ------------------------------------------------
+        # LDPM latent diffusion ε-pred loss (global prosody)
+        # ------------------------------------------------
+        ldpm_loss = torch.tensor(0.0, device=x.device)
+        if self.ldpm is not None and self.noise_scheduler is not None:
+            B = mu_y.size(0)
+            T_noise = self.noise_scheduler.T
+            t = torch.randint(1, T_noise, (B,), device=x.device)
+            z_t, eps = self.noise_scheduler.sample_noisy(decoder_h.transpose(1, 2), t)
+            eps_pred = self.ldpm(z_t, t, cond_local=mu_y, cond_global=g)
+            ldpm_loss = F.mse_loss(eps_pred, eps)
 
-        # get conditions
-        conds = torch.zeros(y.shape, device=y.device)
+        # --------------------------------
+        # flow matching loss (frozen decoder)
+        # --------------------------------
+        conds = torch.zeros_like(y)
         for i, j in enumerate(y_lengths):
             if random.random() < 0.5:
                 continue
-            index = random.randint(0, int(0.3 * j))
-            conds[i, :, :index] = y[i, :, :index]
+            idx = random.randint(0, int(0.3 * j))
+            conds[i, :, :idx] = y[i, :, :idx]
 
-        # Align encoded text with mel-spectrogram and get mu_y segment
-        mu_y = torch.matmul(attn.transpose(1, 2), mu_x.transpose(1, 2))
-        mu_y = mu_y.transpose(1, 2)
-
-        # Compute loss of the decoder
         diff_loss, _ = self.decoder.compute_loss(
             x1=y,
             mask=y_mask,
             mu=mu_y,
-            spks=spk_embed_proj,
+            spks=spk_embed,
             cond=conds,
-            streaming=streaming,
+            streaming=(random.random() < 0.5),
         )
 
-        # Compute the prior loss: MSE between aligned encoder representations
-        # The prior loss trains the text encoder to match the frozen flow encoder representations
-        decoder_max_length = decoder_h.shape[1]
+        # prior loss (match flow encoder hidden)
         decoder_h_mask = (
-            sequence_mask(y_lengths, decoder_max_length).unsqueeze(1).to(mu_y.dtype)
+            sequence_mask(y_lengths, decoder_h.shape[1]).unsqueeze(1).to(mu_y.dtype)
         )
-        mu_y_t = mu_y.transpose(1, 2)  # (B, T_mel, n_feats)
-
-        # Compute prior loss comparing aligned representations
+        mu_y_t = mu_y.transpose(1, 2)
         prior_loss = torch.sum(
             0.5
             * ((decoder_h - mu_y_t) ** 2 + math.log(2 * math.pi))
@@ -366,4 +335,4 @@ class JyutVoiceTTS(BaseLightningClass):
         )
         prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 
-        return dur_loss, prior_loss, diff_loss, attn
+        return dur_loss, prior_loss, diff_loss, ldpm_loss, attn
