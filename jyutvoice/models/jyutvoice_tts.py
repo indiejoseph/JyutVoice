@@ -12,7 +12,6 @@ from jyutvoice.utils.model import (
 from jyutvoice.utils.mask import make_pad_mask
 import jyutvoice.utils.monotonic_align as monotonic_align
 from jyutvoice.models.baselightningmodule import BaseLightningClass
-from jyutvoice.models.reference_encoder import MelStyleEncoder
 
 
 class JyutVoiceTTS(BaseLightningClass):
@@ -20,9 +19,10 @@ class JyutVoiceTTS(BaseLightningClass):
         self,
         encoder,
         decoder,
+        style_encoder,
         output_size=80,
         spk_embed_dim=192,
-        gin_channels=256,
+        freeze_encoder=False,
         freeze_decoder=False,
         use_precomputed_durations=False,
         optimizer=None,
@@ -36,19 +36,15 @@ class JyutVoiceTTS(BaseLightningClass):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.style_encoder = style_encoder
         self.use_precomputed_durations = use_precomputed_durations
         self.n_feats = encoder.n_feats
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
         self.output_size = output_size
+        self.style_proj = torch.nn.Linear(style_encoder.gst_token_dim, self.n_feats)
 
-        self.style_encoder = MelStyleEncoder(
-            n_mel_channels=self.output_size,
-            style_hidden=128,
-            style_vector_dim=gin_channels,
-            style_kernel_size=5,
-            style_head=2,
-            dropout=0.1,
-        )
+        if freeze_encoder:
+            self._freeze_encoder()
 
         if freeze_decoder:
             self._freeze_decoder()
@@ -56,6 +52,11 @@ class JyutVoiceTTS(BaseLightningClass):
         # Load pretrained weights if provided
         if pretrain_path:
             self.load_pretrain(pretrain_path)
+
+    def _freeze_encoder(self):
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        self.encoder.eval()
 
     def _freeze_decoder(self):
         for param in self.decoder.parameters():
@@ -167,15 +168,18 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Project speaker embedding
         spk_embed = F.normalize(spk_embed, dim=1)
-        spk_embed_proj = self.spk_embed_affine_layer(spk_embed)
+        spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        # Compute style conditioning
-        c = self.style_encoder(prompt_feat, None)
+        prompt_mel_for_style = prompt_feat.transpose(1, 2)  # (B, T_ref, n_mel_channels)
+        style_emb = self.style_encoder(prompt_mel_for_style)  # (B, gst_token_dim)
+        style_cond = self.style_proj(style_emb)  # (B, output_size)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos, c
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
+
+        mu_x = mu_x + style_cond.unsqueeze(1)  # (B, n_feats, T_text)
 
         w = torch.exp(logw) * x_mask
         w_ceil = torch.ceil(w) * length_scale
@@ -225,7 +229,7 @@ class JyutVoiceTTS(BaseLightningClass):
         decoder_outputs, _ = self.decoder(
             mu=mu_y,
             mask=mask.unsqueeze(1),
-            spks=spk_embed_proj,
+            spks=spk_embed,
             cond=conds,
             n_timesteps=n_timesteps,
             temperature=temperature,
@@ -257,8 +261,6 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
-        z,
-        z_lengths,
         durations=None,
     ):
         """
@@ -278,18 +280,23 @@ class JyutVoiceTTS(BaseLightningClass):
             syllable_pos: Syllable position information (B, T_text)
             spk_embed: Speaker embedding (B, spk_embed_dim)
             decoder_h: Hidden states from the flow encoder of CosyVoice2 (B, T_mel, n_feats)
-            z: Reference mel-spectrogram for style extraction (B, n_mel_channels, T_ref)
-            z_lengths: Lengths of reference mel-spectrograms (B,)
             durations: Optional ground truth durations for teacher forcing
         """
+        # xvec projection
+        spk_embed = F.normalize(spk_embed, dim=1)
+        spk_embed = self.spk_embed_affine_layer(spk_embed)
+
+        mel_for_style = y.transpose(1, 2)  # (B, T_ref, n_mel_channels)
+        style_emb = self.style_encoder(mel_for_style)  # (B, gst_token_dim)
+        style_cond = self.style_proj(style_emb)  # (B, output_size)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         # compute style conditioning
-        ref_mask = sequence_mask(z_lengths, z.shape[-1]).unsqueeze(1).to(z.dtype)
-        c = self.style_encoder(z, ref_mask)
         mu_x, logw, x_mask = self.encoder(
-            x, x_lengths, lang, tone, word_pos, syllable_pos, c
+            x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
+        mu_x = mu_x + style_cond.unsqueeze(2)  # (B, n_feats, T_text)
+
         y_max_length = y.shape[-1]
 
         y_mask = sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask)
@@ -324,10 +331,6 @@ class JyutVoiceTTS(BaseLightningClass):
         # NOTE unified training, static_chunk_size > 0 or = 0
         streaming = True if random.random() < 0.5 else False
 
-        # xvec projection
-        spk_embed = F.normalize(spk_embed, dim=1)
-        spk_embed_proj = self.spk_embed_affine_layer(spk_embed)
-
         # get conditions
         conds = torch.zeros(y.shape, device=y.device)
         for i, j in enumerate(y_lengths):
@@ -345,7 +348,7 @@ class JyutVoiceTTS(BaseLightningClass):
             x1=y,
             mask=y_mask,
             mu=mu_y,
-            spks=spk_embed_proj,
+            spks=spk_embed,
             cond=conds,
             streaming=streaming,
         )

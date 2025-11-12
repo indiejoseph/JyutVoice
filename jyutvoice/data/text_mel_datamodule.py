@@ -393,7 +393,6 @@ class TextMelBatchCollate:
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
         x = torch.zeros((B, x_max_length), dtype=torch.long)
-        z = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
         lang = torch.zeros((B, x_max_length), dtype=torch.long)
         tone = torch.zeros((B, x_max_length), dtype=torch.long)
         word_pos = torch.zeros((B, x_max_length), dtype=torch.long)
@@ -402,7 +401,7 @@ class TextMelBatchCollate:
         spk_embed = torch.zeros(B, 192, dtype=torch.float32)
         decoder_h = torch.zeros((B, y_max_length, decoder_h_dim), dtype=torch.float32)
 
-        y_lengths, x_lengths, z_lengths = [], [], []
+        y_lengths, x_lengths = [], []
         for i, item in enumerate(batch):
             y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_, decoder_h_ = (
                 item["y"],
@@ -414,13 +413,10 @@ class TextMelBatchCollate:
                 item["spk_emb"],
                 item["decoder_h"],
             )
-            z_ = random_slice_tensor(y_)
             y_lengths.append(y_.shape[-1])
             x_lengths.append(x_.shape[-1])
-            z_lengths.append(z_[i].shape[-1])
             y[i, :, : y_.shape[-1]] = y_
             x[i, : x_.shape[-1]] = x_
-            z[i, :, : z_.shape[-1]] = z_
             lang[i, : lang_.shape[-1]] = lang_
             tone[i, : tone_.shape[-1]] = tone_
             word_pos[i, : word_pos_.shape[-1]] = word_pos_
@@ -446,15 +442,12 @@ class TextMelBatchCollate:
 
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)
-        z_lengths = torch.tensor(z_lengths, dtype=torch.long)
 
         batch_dict = {
             "x": x,
             "x_lengths": x_lengths,
             "y": y,
             "y_lengths": y_lengths,
-            "z": z,
-            "z_lengths": z_lengths,
             "lang": lang,
             "tone": tone,
             "word_pos": word_pos,

@@ -2,7 +2,6 @@
 n_feats: 80
 p_dropout: 0.1
 filter_channels_dp: 256
-gin_channels: 256
 token_frame_rate: 25
 token_mel_ratio: 2
 # stream related params
@@ -67,7 +66,13 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_vocab: 97
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
-    spk_embed_dim: !ref <gin_channels>
+    spk_embed_dim: !ref <n_feats>
+
+  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
+    idim: !ref <n_feats>
+    gst_tokens: 10
+    gst_token_dim: 256
+    gst_heads: 4
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
@@ -97,7 +102,6 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
-  gin_channels: !ref <gin_channels>
   pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4

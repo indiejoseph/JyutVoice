@@ -169,9 +169,7 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-            loss_dict["diff_loss"] * 0.2
-        )
+        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
         self.log(
             "loss/train",
             total_loss,
@@ -216,9 +214,7 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = ((loss_dict["dur_loss"] + loss_dict["prior_loss"]) * 0.8) + (
-            loss_dict["diff_loss"] * 0.2
-        )
+        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
         self.log(
             "loss/val",
             total_loss,
