@@ -383,6 +383,9 @@ class TextMelBatchCollate:
             [item["x"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
         n_feats = batch[0]["y"].shape[-2]
+        speech_token_max_length = max(
+            [item["speech_token"].shape[-1] for item in batch]
+        )
 
         # Get decoder_h dimension from the actual data (hidden state dimension)
         decoder_h_dim = (
@@ -400,10 +403,23 @@ class TextMelBatchCollate:
         durations = torch.zeros((B, x_max_length), dtype=torch.long)
         spk_embed = torch.zeros(B, 192, dtype=torch.float32)
         decoder_h = torch.zeros((B, y_max_length, decoder_h_dim), dtype=torch.float32)
+        speech_token = torch.full(
+            (B, speech_token_max_length), fill_value=-1, dtype=torch.long
+        )
 
         y_lengths, x_lengths = [], []
         for i, item in enumerate(batch):
-            y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_, decoder_h_ = (
+            (
+                y_,
+                x_,
+                lang_,
+                tone_,
+                word_pos_,
+                syllable_pos_,
+                spk_embed_,
+                decoder_h_,
+                speech_token_,
+            ) = (
                 item["y"],
                 item["x"],
                 item["lang"],
@@ -412,6 +428,7 @@ class TextMelBatchCollate:
                 item["syllable_pos"],
                 item["spk_emb"],
                 item["decoder_h"],
+                item["speech_token"],
             )
             y_lengths.append(y_.shape[-1])
             x_lengths.append(x_.shape[-1])
@@ -439,9 +456,13 @@ class TextMelBatchCollate:
             decoder_h[i] = decoder_h_padded
             if item["durations"] is not None:
                 durations[i, : item["durations"].shape[-1]] = item["durations"]
+            speech_token[i, : speech_token_.shape[-1]] = speech_token_
 
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)
+        speech_token_lengths = torch.tensor(
+            [item["speech_token"].shape[-1] for item in batch], dtype=torch.long
+        )
 
         batch_dict = {
             "x": x,
@@ -455,6 +476,8 @@ class TextMelBatchCollate:
             "spk_embed": spk_embed,
             "decoder_h": decoder_h,
             "durations": durations if not torch.eq(durations, 0).all() else None,
+            "speech_token": speech_token,
+            "speech_token_lengths": speech_token_lengths,
         }
 
         return batch_dict

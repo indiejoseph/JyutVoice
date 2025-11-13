@@ -375,6 +375,8 @@ def process_sample(
         sample["spk_emb"] = spk_emb
     if decoder_h is not None:
         sample["decoder_h"] = decoder_h
+    if speech_token is not None:
+        sample["speech_token"] = speech_token.squeeze(0).tolist()
 
     return sample
 

@@ -108,6 +108,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     weight_decay: 0.0
   scheduler: null
   warmup_steps: 100 # Number of warmup steps for learning rate
+  speech_vocab_size: 6561
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts

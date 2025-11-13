@@ -29,6 +29,7 @@ class JyutVoiceTTS(BaseLightningClass):
         scheduler=None,
         pretrain_path=None,
         warmup_steps=100,
+        speech_vocab_size=6561,
     ):
         super().__init__()
 
@@ -42,6 +43,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
         self.output_size = output_size
         self.style_proj = torch.nn.Linear(style_encoder.gst_token_dim, self.n_feats)
+        self.token_head = torch.nn.Linear(self.n_feats, speech_vocab_size)
 
         if freeze_encoder:
             self._freeze_encoder()
@@ -247,6 +249,31 @@ class JyutVoiceTTS(BaseLightningClass):
             "rtf": rtf,
         }
 
+    def _repeat_speech_tokens_to_frames(self, speech_tokens, T_mel, pad_id=0):
+        """Repeat speech tokens to frame-level labels using a fixed ratio.
+
+        Args:
+        speech_tokens: (B, T_tok)
+        T_mel: int, target frame length
+        pad_id: pad index for leftover frames
+        Returns:
+        y_frame: (B, T_mel) frame-level token ids
+        """
+        B, T_tok = speech_tokens.shape
+        # simple integer ratio; assume T_mel >= T_tok
+        R = max(T_mel // T_tok, 1)
+
+        y_frame = speech_tokens.unsqueeze(-1).repeat(1, 1, R).view(B, -1)
+
+        if y_frame.size(1) > T_mel:
+            y_frame = y_frame[:, :T_mel]
+        elif y_frame.size(1) < T_mel:
+            pad_len = T_mel - y_frame.size(1)
+            pad = y_frame.new_full((B, pad_len), pad_id)
+            y_frame = torch.cat([y_frame, pad], dim=1)
+
+        return y_frame
+
     def forward(
         self,
         x,
@@ -259,6 +286,8 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
+        speech_tokens=None,
+        speech_token_pad_id=-1,
         durations=None,
     ):
         """
@@ -367,4 +396,32 @@ class JyutVoiceTTS(BaseLightningClass):
         )
         prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 
-        return dur_loss, prior_loss, diff_loss, attn
+        token_ce_loss = torch.tensor(0.0, device=y.device)
+        if self.token_head is not None and speech_tokens is not None:
+            B, T_mel, _ = mu_y_t.shape
+            # frame-level labels from speech tokens
+            y_frame = self._repeat_speech_tokens_to_frames(
+                speech_tokens, T_mel, pad_id=speech_token_pad_id
+            )  # (B, T_mel)
+
+            # apply same mask as mel
+            frame_mask = y_mask.squeeze(1).bool()  # (B, T_mel)
+
+            logits = self.token_head(mu_y_t)  # (B, T_mel, V)
+            V = logits.size(-1)
+
+            logits_flat = logits.view(B * T_mel, V)
+            targets_flat = y_frame.view(B * T_mel)
+            valid_mask = frame_mask.view(B * T_mel)
+
+            logits_flat = logits_flat[valid_mask]
+            targets_flat = targets_flat[valid_mask]
+
+            if logits_flat.numel() > 0:
+                token_ce_loss = F.cross_entropy(
+                    logits_flat,
+                    targets_flat,
+                    ignore_index=speech_token_pad_id,
+                )
+
+        return dur_loss, prior_loss, diff_loss, token_ce_loss, attn
