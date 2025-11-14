@@ -68,12 +68,6 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_tone: 7 # pad + 6 tones
     spk_embed_dim: !ref <n_feats>
 
-  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
-    idim: !ref <n_feats>
-    gst_tokens: 10
-    gst_token_dim: 256
-    gst_heads: 4
-
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
     n_spks: 1
@@ -102,7 +96,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
-  pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
+  # pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4
     weight_decay: 0.0
@@ -115,10 +109,10 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   # speaker_embedding_model_path: pretrained_models/campplus.onnx
   # flow_encoder_path: pretrained_models/flow_encoder.pt
   # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
-  batch_size: 4
+  batch_size: 8
   num_workers: 2
   pin_memory: true
-  dataset_valid_ratio: 0.1
+  dataset_valid_ratio: 0.001
   seed: 42
   load_durations: false
   add_blank: !ref <add_blank>

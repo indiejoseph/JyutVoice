@@ -19,7 +19,6 @@ class JyutVoiceTTS(BaseLightningClass):
         self,
         encoder,
         decoder,
-        style_encoder,
         output_size=80,
         spk_embed_dim=192,
         freeze_encoder=False,
@@ -36,12 +35,10 @@ class JyutVoiceTTS(BaseLightningClass):
 
         self.encoder = encoder
         self.decoder = decoder
-        self.style_encoder = style_encoder
         self.use_precomputed_durations = use_precomputed_durations
         self.n_feats = encoder.n_feats
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
         self.output_size = output_size
-        self.style_proj = torch.nn.Linear(style_encoder.gst_token_dim, self.n_feats)
 
         if freeze_encoder:
             self._freeze_encoder()
@@ -170,14 +167,10 @@ class JyutVoiceTTS(BaseLightningClass):
         spk_embed = F.normalize(spk_embed, dim=1)
         spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        style_emb = self.style_encoder(prompt_feat)  # (B, gst_token_dim)
-        style_cond = self.style_proj(style_emb)  # (B, output_size)
-
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         mu_x, logw, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
-        mu_x = mu_x + style_cond.unsqueeze(2)  # (B, n_feats, T_text)
 
         w = torch.exp(logw) * x_mask
         w_ceil = torch.ceil(w) * length_scale
@@ -284,16 +277,10 @@ class JyutVoiceTTS(BaseLightningClass):
         spk_embed = F.normalize(spk_embed, dim=1)
         spk_embed = self.spk_embed_affine_layer(spk_embed)
 
-        mel_for_style = y.transpose(1, 2)  # (B, T_ref, n_mel_channels)
-        style_emb = self.style_encoder(mel_for_style)  # (B, gst_token_dim)
-        style_cond = self.style_proj(style_emb)  # (B, output_size)
-
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        # compute style conditioning
         mu_x, logw, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
-        mu_x = mu_x + style_cond.unsqueeze(2)  # (B, n_feats, T_text)
 
         y_max_length = y.shape[-1]
 
