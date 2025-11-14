@@ -112,14 +112,14 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
-  dataset_path: tmp/dummy_dataset_resaved
+  dataset_path: tmp/dataset_processed2
   # speaker_embedding_model_path: pretrained_models/campplus.onnx
   # flow_encoder_path: pretrained_models/flow_encoder.pt
   # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
-  batch_size: 4
+  batch_size: 8
   num_workers: 2
   pin_memory: true
-  dataset_valid_ratio: 0.1
+  dataset_valid_ratio: 0.001
   seed: 42
   load_durations: false
   add_blank: !ref <add_blank>

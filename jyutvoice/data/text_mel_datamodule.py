@@ -179,6 +179,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         lang = row["lang"]
         phone = row["phone"]
         audio = row["audio"]["array"]
+        speech_token = torch.tensor(row["speech_token"]).long()
         audio_path = (
             row["audio"]["path"]
             if row["audio"]["path"] is not None
@@ -279,6 +280,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             "syllable_pos": syllable_pos,
             "spk_emb": spk_emb,
             "decoder_h": decoder_h,
+            "speech_token": speech_token,
         }
 
     def get_durations(self, filepath, text):

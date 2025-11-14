@@ -90,6 +90,7 @@ class BaseLightningClass(LightningModule, ABC):
         )
         spk_embed = batch["spk_embed"]
         decoder_h = batch["decoder_h"]
+        speech_tokens = batch["speech_token"]
 
         dur_loss, prior_loss, diff_loss, token_ce_loss, *_ = self(
             x=x,
@@ -103,6 +104,7 @@ class BaseLightningClass(LightningModule, ABC):
             spk_embed=spk_embed,
             decoder_h=decoder_h,
             durations=batch.get("durations", None),
+            speech_tokens=speech_tokens,
         )
         return {
             "dur_loss": dur_loss,
