@@ -373,7 +373,6 @@ class TextEncoder(nn.Module):
         self,
         encoder_type,
         encoder_params,
-        duration_predictor_params,
         n_vocab,
         n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
         n_tone=7,  # PAD + 6 tones
@@ -425,12 +424,6 @@ class TextEncoder(nn.Module):
             self.p_dropout,
         )
         self.proj_m = torch.nn.Conv1d(self.n_channels + spk_embed_dim, self.n_feats, 1)
-        self.proj_w = DurationPredictor(
-            self.n_channels + spk_embed_dim,
-            duration_predictor_params.filter_channels_dp,
-            duration_predictor_params.kernel_size,
-            duration_predictor_params.p_dropout,
-        )
 
     def output_size(self):
         """Get the output size of the encoder"""
@@ -457,8 +450,7 @@ class TextEncoder(nn.Module):
         Returns:
             mu (torch.Tensor): average output of the encoder
                 shape: (batch_size, n_feats, max_text_length)
-            logw (torch.Tensor): log duration predicted by the duration predictor
-                shape: (batch_size, 1, max_text_length)
+            x (torch.Tensor): output of the encoder
             x_mask (torch.Tensor): mask for the text input
                 shape: (batch_size, 1, max_text_length)
         """
@@ -477,10 +469,7 @@ class TextEncoder(nn.Module):
         x = self.encoder(x, x_mask)
         mu = self.proj_m(x) * x_mask
 
-        x_dp = torch.detach(x)
-        logw = self.proj_w(x_dp, x_mask)
-
-        return mu, logw, x_mask
+        return mu, x, x_mask
 
 
 if __name__ == "__main__":
@@ -501,13 +490,6 @@ if __name__ == "__main__":
                 "prenet": True,
             }
         ),
-        duration_predictor_params=DictConfig(
-            {
-                "filter_channels_dp": 256,
-                "kernel_size": 3,
-                "p_dropout": 0.1,
-            }
-        ),
         n_vocab=38,  # 49
         n_lang=3,
         n_tone=7,
@@ -521,10 +503,10 @@ if __name__ == "__main__":
     lang = torch.randint(0, 3, (2, 10))
     spk_embed = torch.randn(2, 192)
 
-    mu, logw, x_mask = text_encoder(
+    mu, x, x_mask = text_encoder(
         x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
     )
 
     print(mu.shape)
-    print(logw.shape)
+    print(x.shape)
     print(x_mask.shape)

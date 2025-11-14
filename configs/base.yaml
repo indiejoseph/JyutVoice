@@ -56,23 +56,23 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
         kernel_size: 3
         p_dropout: !ref <p_dropout>
         prenet: true
-
-    duration_predictor_params: !new:omegaconf.DictConfig
-      content:
-        filter_channels_dp: !ref <filter_channels_dp>
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-
     n_vocab: 97
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
     spk_embed_dim: !ref <n_feats>
 
-  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
-    idim: !ref <n_feats>
-    gst_tokens: 10
-    gst_token_dim: 256
-    gst_heads: 4
+  duration_predictor: !new:jyutvoice.models.duration_predictors.DP
+    params: !new:omegaconf.DictConfig
+      content:
+        sigma_min: 1e-4
+        n_steps: 10
+        name: flow_matching
+        n_spks: 2 # greater then 1 for speaker conditional duration predictor
+        spk_emb_dim: !ref <n_feats>
+        filter_channels: 256
+        kernel_size: 3
+        n_channels: 192
+        p_dropout: !ref <p_dropout>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
