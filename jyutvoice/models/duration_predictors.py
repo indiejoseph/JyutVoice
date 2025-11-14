@@ -218,8 +218,6 @@ class FlowMatchingDurationPrediction(nn.Module):
             enc_outputs.detach()
         )  # don't update encoder from the duration predictor
         b, _, t = enc_outputs.shape
-        print("enc_outputs", enc_outputs.shape)
-        print("x1", x1.shape)
 
         # random timestep
         t = torch.rand([b, 1, 1], device=enc_outputs.device, dtype=enc_outputs.dtype)
