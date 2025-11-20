@@ -293,6 +293,7 @@ class JyutVoiceTTS(BaseLightningClass):
         mu_x, logw, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )
+        mu_base = mu_x  # (B, n_feats, T_text)
         mu_x = mu_x + style_cond.unsqueeze(2)  # (B, n_feats, T_text)
 
         y_max_length = y.shape[-1]
@@ -367,4 +368,8 @@ class JyutVoiceTTS(BaseLightningClass):
         )
         prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 
-        return dur_loss, prior_loss, diff_loss, attn
+        # Global pooling over time makes this a global prosody latent
+        mu_global = mu_base.mean(dim=2)  # (B, n_feats)
+        kl_loss = (mu_global**2).mean()  # ≈ KL(N(μ, I) || N(0, I))
+
+        return dur_loss, prior_loss, diff_loss, kl_loss, attn
