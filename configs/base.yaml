@@ -93,6 +93,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
       static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
       num_decoding_left_chunks: !ref <num_decoding_left_chunks>
 
+  freeze_encoder: false
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
@@ -105,7 +106,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
-  dataset_path: tmp/dummy_dataset_resaved
+  dataset_path: tmp/dataset_processed
   # speaker_embedding_model_path: pretrained_models/campplus.onnx
   # flow_encoder_path: pretrained_models/flow_encoder.pt
   # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
@@ -134,6 +135,8 @@ trainer: !new:lightning.Trainer
   log_every_n_steps: 1
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
 
 callbacks:
   model_checkpoint:

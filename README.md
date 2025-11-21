@@ -16,22 +16,17 @@
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/jyutvoice-tts.git
-cd jyutvoice-tts
+git clone https://github.com/indiejoseph/JyutVoice.git
+cd JyutVoice
 conda create -n jyutvoice python=3.11
 conda activate jyutvoice
 pip install -r requirements.txt
 ```
 
-### Download Models
+### Download Pretrained Models
 
 ```bash
-cd pretrained_models
-# Speaker embedding model
-wget https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B/resolve/main/campplus.onnx
-
-# Speech tokenizer
-wget https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B/resolve/main/speech_tokenizer_v2.onnx
+python scripts/download_pretrain_weights.py
 ```
 
 ### Training
@@ -216,24 +211,19 @@ optimizer: !name:torch.optim.AdamW
 
 ### Download Pretrained Models
 
-The following models need to be downloaded and placed in `pretrained_models/`:
+Run the download script to get all required models:
 
-1. **campplus.onnx** - Speaker embedding model
-   ```bash
-   cd pretrained_models
-   wget https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B/resolve/main/campplus.onnx
-   ```
+```bash
+python scripts/download_pretrain_weights.py
+```
 
-2. **speech_tokenizer_v2.onnx** - Speech tokenizer
-   ```bash
-   wget https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B/resolve/main/speech_tokenizer_v2.onnx
-   ```
+This will download and prepare:
 
-3. **pretrain.pt** - JyutVoice transfer learning checkpoint
-   - Composed of CosyVoice2 flow encoder transferred weights
-   - Plus our custom modules initialization
-   - Automatically loaded during training
-   - Already included in the repository
+- **campplus.onnx** - Speaker embedding model
+- **speech_tokenizer_v2.onnx** - Speech tokenizer
+- **flow_encoder.pt** & **flow_decoder.pt** - Extracted from CosyVoice2 flow model
+- **hift.pt** - HiFi-GAN vocoder
+- **pretrain.pt** - JyutVoice transfer learning checkpoint (generated)
 
 ## Transfer Learning
 

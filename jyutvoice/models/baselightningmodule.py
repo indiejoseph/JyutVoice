@@ -4,6 +4,7 @@ The benefit of this abstraction is that all the logic outside of model definitio
 """
 
 import inspect
+import math
 from abc import ABC
 from typing import Any, Dict
 import wandb
@@ -91,7 +92,7 @@ class BaseLightningClass(LightningModule, ABC):
         spk_embed = batch["spk_embed"]
         decoder_h = batch["decoder_h"]
 
-        dur_loss, prior_loss, diff_loss, *_ = self(
+        dur_loss, prior_loss, diff_loss, kl_loss, *_ = self(
             x=x,
             x_lengths=x_lengths,
             y=y,
@@ -108,6 +109,7 @@ class BaseLightningClass(LightningModule, ABC):
             "dur_loss": dur_loss,
             "prior_loss": prior_loss,
             "diff_loss": diff_loss,
+            "kl_loss": kl_loss,
         }
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -117,6 +119,7 @@ class BaseLightningClass(LightningModule, ABC):
 
     def training_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
+        step = float(self.global_step)
 
         # Log current learning rate
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
@@ -167,9 +170,22 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
             batch_size=batch["x"].shape[0],
         )
+        self.log(
+            "sub_loss/train_kl_loss",
+            loss_dict["kl_loss"],
+            on_step=True,
+            on_epoch=True,
+            logger=True,
+            sync_dist=True,
+            batch_size=batch["x"].shape[0],
+        )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
+        total_loss = (
+            loss_dict["dur_loss"]
+            + loss_dict["prior_loss"]
+            + (1e-6 * loss_dict["kl_loss"])
+        )
         self.log(
             "loss/train",
             total_loss,
@@ -214,7 +230,11 @@ class BaseLightningClass(LightningModule, ABC):
         )
 
         # total_loss = sum(loss_dict.values())
-        total_loss = loss_dict["dur_loss"] + loss_dict["prior_loss"]
+        total_loss = (
+            loss_dict["dur_loss"]
+            + loss_dict["prior_loss"]
+            + (1e-6 * loss_dict["kl_loss"])
+        )
         self.log(
             "loss/val",
             total_loss,
@@ -267,6 +287,7 @@ class BaseLightningClass(LightningModule, ABC):
                         break
                     x = one_batch["x"][i].unsqueeze(0).to(self.device)
                     x_lengths = one_batch["x_lengths"][i].unsqueeze(0).to(self.device)
+                    y = one_batch["y"][i].unsqueeze(0).to(self.device)
                     lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
                     tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
                     word_pos = one_batch["word_pos"][i].unsqueeze(0).to(self.device)
@@ -286,6 +307,7 @@ class BaseLightningClass(LightningModule, ABC):
                         word_pos[:, : x_lengths.item()],
                         syllable_pos[:, : x_lengths.item()],
                         spk_embed=spk_embed,
+                        prompt_feat=y,
                         n_timesteps=10,
                     )
                     y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
