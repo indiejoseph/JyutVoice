@@ -70,6 +70,12 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     spk_embed_dim: !ref <n_feats>
     lang_embed_dim: !ref <lang_embed_dim>
 
+  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
+    idim: !ref <n_feats>
+    gst_tokens: 10
+    gst_token_dim: 256
+    gst_heads: 4
+
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
     n_spks: 1

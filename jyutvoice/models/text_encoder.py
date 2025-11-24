@@ -398,9 +398,8 @@ class TextEncoder(nn.Module):
         nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
 
         # language embedding (we'll pool to global later)
-        self.lang_channels = self.n_channels
-        self.lang_emb = nn.Embedding(n_lang, self.lang_channels)
-        nn.init.normal_(self.lang_emb.weight, 0.0, self.lang_channels**-0.5)
+        self.lang_emb = nn.Embedding(n_lang, self.lang_embed_dim)
+        nn.init.normal_(self.lang_emb.weight, 0.0, self.lang_embed_dim**-0.5)
 
         self.tone_emb = nn.Embedding(n_tone, self.n_channels)
         nn.init.normal_(self.tone_emb.weight, 0.0, self.n_channels**-0.5)
@@ -424,7 +423,7 @@ class TextEncoder(nn.Module):
             self.prenet = lambda x, x_mask: x
 
         # total channels into encoder: phoneme + speaker + language
-        in_channels = self.n_channels + self.spk_embed_dim + self.lang_channels
+        in_channels = self.n_channels + self.spk_embed_dim + self.lang_embed_dim
 
         self.encoder = Encoder(
             in_channels,
@@ -475,22 +474,10 @@ class TextEncoder(nn.Module):
             B, self.spk_embed_dim, T
         )  # (B, C_spk, T)
 
-        # --- language embedding: token-level -> global -> tiled ---
-        # token-level lang emb: (B, T, C_lang)
-        lang_token = self.lang_emb(lang)  # uses lang as (B, T)
-
-        # mask for pooling: (B, T, 1)
-        lang_mask = x_mask.transpose(1, 2)  # (B, T, 1)
-
-        # masked mean over time -> (B, C_lang)
-        denom = lang_mask.sum(dim=1).clamp(min=1.0)  # avoid div by zero
-        lang_global = (lang_token * lang_mask).sum(dim=1) / denom  # (B, C_lang)
-
-        # tile over time: (B, C_lang, T)
-        lang_global = lang_global.unsqueeze(-1).expand(B, self.lang_channels, T)
+        lang_embed = self.lang_emb(lang).transpose(1, 2)  # (B, D_lang, T)
 
         # concat [phoneme, spk, lang]
-        x = torch.cat([x, spk_global, lang_global], dim=1)  # (B, C_total, T)
+        x = torch.cat([x, spk_global, lang_embed], dim=1)  # (B, C + C_spk + D_lang, T)
 
         # encoder
         x = self.encoder(x, x_mask)
