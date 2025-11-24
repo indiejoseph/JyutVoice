@@ -70,12 +70,6 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     spk_embed_dim: !ref <n_feats>
     lang_embed_dim: !ref <lang_embed_dim>
 
-  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
-    idim: !ref <n_feats>
-    gst_tokens: 10
-    gst_token_dim: 256
-    gst_heads: 4
-
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
     n_spks: 1
@@ -105,7 +99,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
-  pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
+  # pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4
     weight_decay: 0.0
