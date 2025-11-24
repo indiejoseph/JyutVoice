@@ -378,6 +378,7 @@ class TextEncoder(nn.Module):
         n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
         n_tone=7,  # PAD + 6 tones
         spk_embed_dim=192,
+        lang_embed_dim=32,
     ):
         super().__init__()
         self.encoder_type = encoder_type
@@ -390,17 +391,23 @@ class TextEncoder(nn.Module):
         self.kernel_size = encoder_params.kernel_size
         self.p_dropout = encoder_params.p_dropout
         self.spk_embed_dim = spk_embed_dim
+        self.lang_embed_dim = lang_embed_dim
 
-        self.emb = torch.nn.Embedding(n_vocab, self.n_channels)
-        torch.nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
-        self.lang_emb = torch.nn.Embedding(
-            n_lang, self.n_channels
-        )  # Assuming 2 languages: Cantonese and English
-        torch.nn.init.normal_(self.lang_emb.weight, 0.0, self.n_channels**-0.5)
+        # token-level embeddings
+        self.emb = nn.Embedding(n_vocab, self.n_channels)
+        nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
+
+        # language embedding (we'll pool to global later)
+        self.lang_channels = self.n_channels
+        self.lang_emb = nn.Embedding(n_lang, self.lang_channels)
+        nn.init.normal_(self.lang_emb.weight, 0.0, self.lang_channels**-0.5)
+
         self.tone_emb = nn.Embedding(n_tone, self.n_channels)
-        torch.nn.init.normal_(self.tone_emb.weight, 0.0, self.n_channels**-0.5)
+        nn.init.normal_(self.tone_emb.weight, 0.0, self.n_channels**-0.5)
+
         self.word_pos_emb = nn.Embedding(4, self.n_channels)  # Word positions [0-3]
         nn.init.normal_(self.word_pos_emb.weight, 0.0, self.n_channels**-0.5)
+
         self.syllable_pos = nn.Embedding(4, self.n_channels)  # Syllable positions [0-3]
         nn.init.normal_(self.syllable_pos.weight, 0.0, self.n_channels**-0.5)
 
@@ -416,68 +423,81 @@ class TextEncoder(nn.Module):
         else:
             self.prenet = lambda x, x_mask: x
 
+        # total channels into encoder: phoneme + speaker + language
+        in_channels = self.n_channels + self.spk_embed_dim + self.lang_channels
+
         self.encoder = Encoder(
-            self.n_channels + spk_embed_dim,
+            in_channels,
             self.filter_channels,
             self.n_heads,
             self.n_layers,
             self.kernel_size,
             self.p_dropout,
         )
-        self.proj_m = torch.nn.Conv1d(self.n_channels + spk_embed_dim, self.n_feats, 1)
+        self.proj_m = nn.Conv1d(in_channels, self.n_feats, 1)
         self.proj_w = DurationPredictor(
-            self.n_channels + spk_embed_dim,
+            in_channels,
             duration_predictor_params.filter_channels_dp,
             duration_predictor_params.kernel_size,
             duration_predictor_params.p_dropout,
         )
 
     def output_size(self):
-        """Get the output size of the encoder"""
         return self.n_feats
 
     def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed):
-        """Run forward pass to the transformer based encoder and duration predictor
-
-        Args:
-            x (torch.Tensor): text input
-                shape: (batch_size, max_text_length)
-            x_lengths (torch.Tensor): text input lengths
-                shape: (batch_size,)
-            lang (torch.Tensor): language ID for the text input
-                shape: (batch_size, max_text_length)
-            tone (torch.Tensor): tone for the text input
-                shape: (batch_size, max_text_length)
-            word_pos (torch.Tensor): word positions for the text input
-                shape: (batch_size, max_text_length)
-            syllable_pos (torch.Tensor): syllable positions for the text input
-                shape: (batch_size, max_text_length)
-            spk_embed (torch.Tensor): speaker embedding
-                shape: (batch_size, spk_embed_dim)
-        Returns:
-            mu (torch.Tensor): average output of the encoder
-                shape: (batch_size, n_feats, max_text_length)
-            logw (torch.Tensor): log duration predicted by the duration predictor
-                shape: (batch_size, 1, max_text_length)
-            x_mask (torch.Tensor): mask for the text input
-                shape: (batch_size, 1, max_text_length)
         """
+        lang: (B, T) language IDs per token
+        """
+
+        # --- token-level phoneme features (NO lang added here) ---
         x = (
             self.emb(x)
             + self.tone_emb(tone)
             + self.word_pos_emb(word_pos)
             + self.syllable_pos(syllable_pos)
-            + self.lang_emb(lang)
-        ) * math.sqrt(self.n_channels)
-        x = torch.transpose(x, 1, -1)
-        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        ) * math.sqrt(
+            self.n_channels
+        )  # (B, T, C)
 
-        x = self.prenet(x, x_mask)
-        x = torch.cat([x, spk_embed.unsqueeze(-1).repeat(1, 1, x.shape[-1])], dim=1)
+        # (B, T, C) -> (B, C, T)
+        x = x.transpose(1, 2)
+
+        # mask: (B, 1, T)
+        x_mask = sequence_mask(x_lengths, x.size(2)).unsqueeze(1).to(x.dtype)
+
+        # prenet on phoneme channels
+        x = self.prenet(x, x_mask)  # (B, C, T)
+        B, _, T = x.size()
+
+        # --- global speaker style, tiled over time ---
+        spk_global = spk_embed.unsqueeze(-1).expand(
+            B, self.spk_embed_dim, T
+        )  # (B, C_spk, T)
+
+        # --- language embedding: token-level -> global -> tiled ---
+        # token-level lang emb: (B, T, C_lang)
+        lang_token = self.lang_emb(lang)  # uses lang as (B, T)
+
+        # mask for pooling: (B, T, 1)
+        lang_mask = x_mask.transpose(1, 2)  # (B, T, 1)
+
+        # masked mean over time -> (B, C_lang)
+        denom = lang_mask.sum(dim=1).clamp(min=1.0)  # avoid div by zero
+        lang_global = (lang_token * lang_mask).sum(dim=1) / denom  # (B, C_lang)
+
+        # tile over time: (B, C_lang, T)
+        lang_global = lang_global.unsqueeze(-1).expand(B, self.lang_channels, T)
+
+        # concat [phoneme, spk, lang]
+        x = torch.cat([x, spk_global, lang_global], dim=1)  # (B, C_total, T)
+
+        # encoder
         x = self.encoder(x, x_mask)
         mu = self.proj_m(x) * x_mask
 
-        x_dp = torch.detach(x)
+        # duration predictor (grad-detached if you want)
+        x_dp = x.detach()
         logw = self.proj_w(x_dp, x_mask)
 
         return mu, logw, x_mask

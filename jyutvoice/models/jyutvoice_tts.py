@@ -85,20 +85,25 @@ class JyutVoiceTTS(BaseLightningClass):
         if not os.path.exists(pretrain_path):
             raise FileNotFoundError(f"Pretrain checkpoint not found: {pretrain_path}")
 
-        # Load the checkpoint
-        checkpoint = torch.load(pretrain_path, map_location="cpu")
+        try:
+            # Load the checkpoint
+            checkpoint = torch.load(pretrain_path, map_location="cpu")
 
-        # Handle both full checkpoints and state_dict-only checkpoints
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        else:
-            state_dict = checkpoint
+            # Handle both full checkpoints and state_dict-only checkpoints
+            if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+                state_dict = checkpoint["state_dict"]
+            else:
+                state_dict = checkpoint
 
-        # Load the state dict with strict=False to allow for some missing keys
-        # (e.g., keys that might be specific to training setup)
-        incompatible_keys = self.load_state_dict(state_dict, strict=False)
+            # Load the state dict with strict=False to allow for some missing keys
+            # (e.g., keys that might be specific to training setup)
+            incompatible_keys = self.load_state_dict(state_dict, strict=False)
 
-        return incompatible_keys
+            return incompatible_keys
+        except Exception as e:
+            print(
+                f"Error loading pretrained weights: {e}, initializing model from scratch."
+            )
 
     @torch.inference_mode()
     def synthesise(

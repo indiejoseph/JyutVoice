@@ -17,6 +17,7 @@ f_min: 0
 f_max: 8000
 add_blank: true
 spk_embed_dim: 192
+lang_embed_dim: 32
 
 hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
   in_channels: 80
@@ -67,6 +68,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_lang: 3 # Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
     spk_embed_dim: !ref <n_feats>
+    lang_embed_dim: !ref <lang_embed_dim>
 
   style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
     idim: !ref <n_feats>
