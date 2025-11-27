@@ -3,6 +3,7 @@ import math
 import datetime as dt
 import random
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 from jyutvoice.utils.model import (
     sequence_mask,
@@ -12,6 +13,56 @@ from jyutvoice.utils.model import (
 from jyutvoice.utils.mask import make_pad_mask
 import jyutvoice.utils.monotonic_align as monotonic_align
 from jyutvoice.models.baselightningmodule import BaseLightningClass
+
+
+class PriorAdapter(nn.Module):
+    """
+    Map mel-like mu_y [B, n_feats, T] -> decoder_h-like [B, T, H]
+    using a small CNN + Transformer stack.
+    """
+
+    def __init__(
+        self,
+        n_feats: int,
+        hidden_dim: int,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        conv_kernel: int = 5,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        # 1D conv over time, keep channels = hidden_dim
+        self.conv = nn.Conv1d(
+            in_channels=n_feats,
+            out_channels=hidden_dim,
+            kernel_size=conv_kernel,
+            padding=conv_kernel // 2,
+        )
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=n_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+    def forward(self, mu_y, src_key_padding_mask=None):
+        """
+        mu_y: [B, n_feats, T]
+        src_key_padding_mask: [B, T] with True for pads (Transformer convention)
+        returns: [B, T, hidden_dim]  (to match decoder_h)
+        """
+        # [B, n_feats, T] -> [B, hidden_dim, T]
+        x = self.conv(mu_y)
+
+        # [B, hidden_dim, T] -> [B, T, hidden_dim]
+        x = x.transpose(1, 2)
+
+        x = self.transformer(x, src_key_padding_mask=src_key_padding_mask)
+        return x
 
 
 class JyutVoiceTTS(BaseLightningClass):
@@ -42,6 +93,14 @@ class JyutVoiceTTS(BaseLightningClass):
         self.spk_embed_affine_layer = torch.nn.Linear(spk_embed_dim, output_size)
         self.output_size = output_size
         self.style_proj = torch.nn.Linear(style_encoder.gst_token_dim, self.n_feats)
+        self.prior_adapter = PriorAdapter(
+            n_feats=self.n_feats,
+            hidden_dim=self.encoder.n_feats,
+            n_heads=4,
+            n_layers=2,
+            conv_kernel=5,
+            dropout=0.1,
+        )
         self.freeze_decoder = freeze_decoder
         self.freeze_encoder = freeze_encoder
 
@@ -199,6 +258,13 @@ class JyutVoiceTTS(BaseLightningClass):
         )  # B, n_feats, T_mel
         encoder_outputs = mu_y[:, :, :y_max_length]
 
+        # Adapt mu_y to decoder_h space
+        mu_y = self.prior_adapter(
+            mu_y, src_key_padding_mask=~y_mask.bool().squeeze(1)
+        ).transpose(
+            1, 2
+        )  # B, n_feats, T_mel
+
         # Enforce batch_size=1 for inference (decoder requirement)
         batch_size = x.size(0)
         if batch_size != 1:
@@ -344,13 +410,37 @@ class JyutVoiceTTS(BaseLightningClass):
         mu_y = torch.matmul(attn.transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
 
+        # Compute mel loss to be prior loss 1
+        prior_loss_1 = torch.sum(
+            0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask
+        )
+        prior_loss_1 = prior_loss_1 / (torch.sum(y_mask) * self.n_feats)
+
+        # Compute masked MSE of adaptor output vs decoder_h (prior loss 2)
+        decoder_h_hat = self.prior_adapter(
+            mu_y, src_key_padding_mask=~y_mask.bool().squeeze(1)
+        )  # [B, T, hidden_dim]
+
+        # Stop gradients to frozen decoder
+        decoder_h_detached = decoder_h.detach()
+
+        # broadcast mask: [B, 1, T] -> [B, T, 1]
+        time_mask = y_mask.transpose(1, 2)  # [B, T, 1]
+
+        diff_h = (decoder_h_hat - decoder_h_detached) * time_mask
+        prior_loss_2 = torch.sum(diff_h**2) / (
+            torch.sum(time_mask) * decoder_h_detached.size(-1)
+        )
+
+        prior_loss = prior_loss_1 + (0.1 * prior_loss_2)
+
         # Compute loss of the decoder
         if self.freeze_decoder:
             # Cut graph to save memory/compute
             diff_loss, _ = self.decoder.compute_loss(
                 x1=y.detach(),
                 mask=y_mask.detach(),
-                mu=mu_y.detach(),
+                mu=decoder_h_hat.transpose(1, 2).detach(),
                 spks=spk_embed.detach(),
                 cond=conds.detach(),
                 streaming=streaming,
@@ -359,27 +449,11 @@ class JyutVoiceTTS(BaseLightningClass):
             diff_loss, _ = self.decoder.compute_loss(
                 x1=y,
                 mask=y_mask,
-                mu=mu_y,
+                mu=decoder_h_hat.transpose(1, 2),
                 spks=spk_embed,
                 cond=conds,
                 streaming=streaming,
             )
-
-        # Compute the prior loss: MSE between aligned encoder representations
-        # The prior loss trains the text encoder to match the frozen flow encoder representations
-        decoder_max_length = decoder_h.shape[1]
-        decoder_h_mask = (
-            sequence_mask(y_lengths, decoder_max_length).unsqueeze(1).to(mu_y.dtype)
-        )
-        mu_y_t = mu_y.transpose(1, 2)  # (B, T_mel, n_feats)
-
-        # Compute prior loss comparing aligned representations
-        prior_loss = torch.sum(
-            0.5
-            * ((decoder_h - mu_y_t) ** 2 + math.log(2 * math.pi))
-            * decoder_h_mask.squeeze(1).unsqueeze(-1)
-        )
-        prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 
         # Global pooling over time makes this a global prosody latent
         mu_global = mu_base.mean(dim=2)  # (B, n_feats)
