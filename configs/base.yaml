@@ -105,7 +105,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   freeze_decoder: true
   output_size: 80
   spk_embed_dim: !ref <spk_embed_dim>
-  # pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
+  pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4
     weight_decay: 0.0

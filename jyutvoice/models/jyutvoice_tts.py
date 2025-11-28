@@ -44,6 +44,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self.style_proj = torch.nn.Linear(style_encoder.gst_token_dim, self.n_feats)
         self.freeze_decoder = freeze_decoder
         self.freeze_encoder = freeze_encoder
+        self.time_head = torch.nn.Linear(self.n_feats, 1)
 
         if freeze_encoder:
             self._freeze_encoder()
@@ -249,6 +250,39 @@ class JyutVoiceTTS(BaseLightningClass):
             "rtf": rtf,
         }
 
+    def get_time_loss(self, attn, mu_base, x_mask, y_lengths):
+        # ----- Token time-position regression (temporal objective) -----
+        # attn: [B, T_text, T_mel]
+        B, T_text, T_mel = attn.shape
+
+        # frame indices [0, 1, ..., T_mel-1]
+        frame_idx = torch.arange(T_mel, device=attn.device, dtype=attn.dtype)  # [T_mel]
+
+        # expected frame index per token: c_{b,i}
+        # [B, T_text, T_mel] * [T_mel] -> [B, T_text]
+        attn_sum = attn.sum(dim=-1).clamp_min(1e-8)  # avoid /0
+        center_t = (attn * frame_idx.unsqueeze(0).unsqueeze(0)).sum(
+            dim=-1
+        ) / attn_sum  # [B, T_text]
+
+        # normalize by utterance length to [0, 1]
+        # y_lengths: [B]
+        norm = (y_lengths - 1).clamp_min(1).to(center_t.dtype)  # [B]
+        target_time = center_t / norm.unsqueeze(1)  # [B, T_text]
+
+        # prediction from encoder states (use mu_base before style, or mu_x; your call)
+        # mu_base: [B, n_feats, T_text] -> [B, T_text, n_feats]
+        mu_tokens = mu_base.transpose(1, 2)  # [B, T_text, n_feats]
+        pred_time = self.time_head(mu_tokens).squeeze(-1)  # [B, T_text]
+
+        # mask pads
+        x_mask_tokens = x_mask.squeeze(1).to(center_t.dtype)  # [B, T_text], 1 for valid
+
+        time_diff = (pred_time - target_time) * x_mask_tokens
+        time_loss = (time_diff**2).sum() / x_mask_tokens.sum().clamp_min(1.0)
+
+        return time_loss
+
     def forward(
         self,
         x,
@@ -385,4 +419,6 @@ class JyutVoiceTTS(BaseLightningClass):
         mu_global = mu_base.mean(dim=2)  # (B, n_feats)
         kl_loss = (mu_global**2).mean()  # ≈ KL(N(μ, I) || N(0, I))
 
-        return dur_loss, prior_loss, diff_loss, kl_loss, attn
+        time_loss = self.get_time_loss(attn, mu_base, x_mask, y_lengths)
+
+        return dur_loss, prior_loss, diff_loss, kl_loss, time_loss, attn
