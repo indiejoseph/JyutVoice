@@ -2,18 +2,15 @@ import os
 import random
 from pathlib import Path
 from typing import Any, Dict, Optional
-import torchaudio.compliance.kaldi as kaldi
 import librosa
 import numpy as np
 import torch
-import whisper
 from lightning import LightningDataModule
 from torch.utils.data.dataloader import DataLoader
-import onnxruntime
 from datasets import load_dataset, load_from_disk
-from jyutvoice.utils.audio import mel_spectrogram
 from jyutvoice.utils.model import fix_len_compatibility
 from jyutvoice.utils.utils import intersperse
+from jyutvoice.utils.audio import mel_spectrogram
 from jyutvoice.text import text_to_sequence
 
 
@@ -36,7 +33,6 @@ class TextMelDataModule(LightningDataModule):
         batch_size,
         num_workers,
         pin_memory,
-        add_blank,
         n_fft,
         n_feats,
         sample_rate,
@@ -44,7 +40,6 @@ class TextMelDataModule(LightningDataModule):
         win_length,
         f_min,
         f_max,
-        token_mel_ratio,
         seed,
         load_durations,
     ):
@@ -70,7 +65,6 @@ class TextMelDataModule(LightningDataModule):
         self.trainset = (
             TextMelDataset(  # pylint: disable=attribute-defined-outside-init
                 ds["train"],
-                self.hparams.add_blank,
                 self.hparams.n_fft,
                 self.hparams.n_feats,
                 self.hparams.sample_rate,
@@ -78,7 +72,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
-                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -87,7 +80,6 @@ class TextMelDataModule(LightningDataModule):
         self.validset = (
             TextMelDataset(  # pylint: disable=attribute-defined-outside-init
                 ds["test"],
-                self.hparams.add_blank,
                 self.hparams.n_fft,
                 self.hparams.n_feats,
                 self.hparams.sample_rate,
@@ -95,7 +87,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
-                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -143,7 +134,6 @@ class TextMelDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset,
-        add_blank=True,
         n_fft=1024,
         n_mels=80,
         sample_rate=22050,
@@ -151,13 +141,11 @@ class TextMelDataset(torch.utils.data.Dataset):
         win_length=1024,
         f_min=0.0,
         f_max=8000,
-        token_mel_ratio=0,
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
     ):
         self.dataset = dataset
-        self.add_blank = add_blank
         self.n_fft = n_fft
         self.n_mels = n_mels
         self.sample_rate = sample_rate
@@ -165,7 +153,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.win_length = win_length
         self.f_min = f_min
         self.f_max = f_max
-        self.token_mel_ratio = token_mel_ratio
         self.load_durations = load_durations
         self.tmp_dir = Path(tmp_dir)
 
@@ -193,22 +180,19 @@ class TextMelDataset(torch.utils.data.Dataset):
             lang_ids = torch.LongTensor(lang)
             phone_ids = torch.LongTensor(phone) if isinstance(phone, list) else phone
             tone = torch.LongTensor(row.get("tones", []))
-            word_pos = torch.LongTensor(row.get("word_pos", []))
-            syllable_pos = torch.LongTensor(row.get("syllable_pos", []))
         else:
             # Need to process text
             text_result = self.get_text(
                 text,
                 lang,
                 phone,
-                add_blank=self.add_blank,
             )
 
             # Skip samples with empty/invalid phoneme sequences
             if text_result is None:
                 return None
 
-            text, lang_ids, phone_ids, tone, word_pos, syllable_pos = text_result
+            text, lang_ids, phone_ids, tone = text_result
 
         if audio is None:
             raise ValueError(f"Audio data is None for {audio_path}")
@@ -236,37 +220,6 @@ class TextMelDataset(torch.utils.data.Dataset):
 
         durations = self.get_durations(audio, text) if self.load_durations else None
 
-        # Load pre-computed decoder hidden state from dataset, or provide default
-        if "decoder_h" in row:
-            decoder_h = (
-                torch.tensor(row["decoder_h"], dtype=torch.float32)
-                if not isinstance(row["decoder_h"], torch.Tensor)
-                else row["decoder_h"].float()
-            )
-        else:
-            # Provide default decoder hidden state for testing
-            # Shape should be (time_steps, n_feats) where n_feats matches mel features (80)
-            mel_time_steps = mel.shape[1]
-            decoder_h = torch.zeros(mel_time_steps, self.n_mels, dtype=torch.float32)
-
-        if self.token_mel_ratio != 0:
-            decoder_h_len = decoder_h.shape[0]
-            token_len = int(min(mel.shape[1] / self.token_mel_ratio, decoder_h_len))
-            mel_len = self.token_mel_ratio * token_len
-            mel = mel[:, :mel_len]
-
-            if mel_len != decoder_h_len:
-                decoder_h = decoder_h[:mel_len, :]
-
-        if self.token_mel_ratio != 0:
-            decoder_h_len = decoder_h.shape[0]
-            token_len = int(min(mel.shape[1] / self.token_mel_ratio, decoder_h_len))
-            mel_len = self.token_mel_ratio * token_len
-            mel = mel[:, :mel_len]
-
-            if mel_len != decoder_h_len:
-                decoder_h = decoder_h[:mel_len, :]
-
         return {
             "x": phone_ids,
             "y": mel,
@@ -275,10 +228,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             "durations": durations,
             "lang": lang_ids,
             "tone": tone,
-            "word_pos": word_pos,
-            "syllable_pos": syllable_pos,
             "spk_emb": spk_emb,
-            "decoder_h": decoder_h,
         }
 
     def get_durations(self, filepath, text):
@@ -322,26 +272,18 @@ class TextMelDataset(torch.utils.data.Dataset):
         text,
         lang,
         phone=None,
-        add_blank=False,
     ):
         try:
-            phone_ids, tone_ids, word_pos, syllable_pos, lang_ids = text_to_sequence(
-                text, lang, phone
-            )
+            phone_ids, tone_ids, lang_ids = text_to_sequence(text, lang, phone)
 
-            if add_blank:
-                phone_ids = intersperse(phone_ids, 0)
-                tone_ids = intersperse(tone_ids, 0)
-                word_pos = intersperse(word_pos, 0)
-                syllable_pos = intersperse(syllable_pos, 0)
-                lang_ids = intersperse(lang_ids, 0)
+            phone_ids = intersperse(phone_ids, 0)
+            tone_ids = intersperse(tone_ids, 0)
+            lang_ids = intersperse(lang_ids, 0)
             phone_ids = torch.LongTensor(phone_ids)
             lang_ids = torch.LongTensor(lang_ids)
             tone = torch.LongTensor(tone_ids)
-            word_pos = torch.LongTensor(word_pos)
-            syllable_pos = torch.LongTensor(syllable_pos)
 
-            return text, lang_ids, phone_ids, tone, word_pos, syllable_pos
+            return text, lang_ids, phone_ids, tone
         except Exception as e:
             raise ValueError(
                 f"Error processing text: {text} with phone: {phone}. Exception: {str(e)}"
@@ -374,87 +316,44 @@ class TextMelBatchCollate:
         self.n_mels = n_mels
 
     def __call__(self, batch):
-        B = len(batch)
-        y_max_length = max(
-            [item["y"].shape[-1] for item in batch]
-        )  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
-        x_max_length = max(
-            [item["x"].shape[-1] for item in batch]
-        )  # pylint: disable=consider-using-generator
-        n_feats = batch[0]["y"].shape[-2]
+        texts = [item["x"] for item in batch]
+        tones = [item["tone"] for item in batch]
+        langs = [item["lang"] for item in batch]
+        mels = [item["y"] for item in batch]
+        mels_sliced = [random_slice_tensor(mel) for mel in mels]
 
-        # Get decoder_h dimension from the actual data (hidden state dimension)
-        decoder_h_dim = (
-            batch[0]["decoder_h"].shape[-1]
-            if len(batch[0]["decoder_h"].shape) >= 2
-            else self.n_mels
+        text_lengths = torch.tensor([text.size(-1) for text in texts], dtype=torch.long)
+        mel_lengths = torch.tensor([mel.size(-1) for mel in mels], dtype=torch.long)
+        mels_sliced_lengths = torch.tensor(
+            [mel_sliced.size(-1) for mel_sliced in mels_sliced], dtype=torch.long
         )
 
-        y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
-        x = torch.zeros((B, x_max_length), dtype=torch.long)
-        lang = torch.zeros((B, x_max_length), dtype=torch.long)
-        tone = torch.zeros((B, x_max_length), dtype=torch.long)
-        word_pos = torch.zeros((B, x_max_length), dtype=torch.long)
-        syllable_pos = torch.zeros((B, x_max_length), dtype=torch.long)
-        durations = torch.zeros((B, x_max_length), dtype=torch.long)
-        spk_embed = torch.zeros(B, 192, dtype=torch.float32)
-        decoder_h = torch.zeros((B, y_max_length, decoder_h_dim), dtype=torch.float32)
-
-        y_lengths, x_lengths = [], []
-        for i, item in enumerate(batch):
-            y_, x_, lang_, tone_, word_pos_, syllable_pos_, spk_embed_, decoder_h_ = (
-                item["y"],
-                item["x"],
-                item["lang"],
-                item["tone"],
-                item["word_pos"],
-                item["syllable_pos"],
-                item["spk_emb"],
-                item["decoder_h"],
-            )
-            y_lengths.append(y_.shape[-1])
-            x_lengths.append(x_.shape[-1])
-            y[i, :, : y_.shape[-1]] = y_
-            x[i, : x_.shape[-1]] = x_
-            lang[i, : lang_.shape[-1]] = lang_
-            tone[i, : tone_.shape[-1]] = tone_
-            word_pos[i, : word_pos_.shape[-1]] = word_pos_
-            syllable_pos[i, : syllable_pos_.shape[-1]] = syllable_pos_
-            spk_embed[i] = torch.tensor(spk_embed_).float()
-            # Handle decoder_h with potentially different dimensions
-            decoder_h_padded = torch.zeros(
-                y_max_length, decoder_h_dim, dtype=torch.float32
-            )
-            decoder_h_actual = torch.tensor(decoder_h_).float()
-            actual_length = min(decoder_h_actual.shape[0], y_max_length)
-            if len(decoder_h_actual.shape) == 2:  # (time, hidden_dim)
-                decoder_h_padded[:actual_length, : decoder_h_actual.shape[1]] = (
-                    decoder_h_actual[:actual_length]
-                )
-            else:  # Handle unexpected shapes
-                decoder_h_padded[
-                    :actual_length, : min(decoder_h_dim, decoder_h_actual.shape[-1])
-                ] = decoder_h_actual[:actual_length]
-            decoder_h[i] = decoder_h_padded
-            if item["durations"] is not None:
-                durations[i, : item["durations"].shape[-1]] = item["durations"]
-
-        y_lengths = torch.tensor(y_lengths, dtype=torch.long)
-        x_lengths = torch.tensor(x_lengths, dtype=torch.long)
+        # pad to the same length
+        texts_padded = torch.nested.to_padded_tensor(
+            torch.nested.nested_tensor(texts), padding=0
+        )
+        tones_padded = torch.nested.to_padded_tensor(
+            torch.nested.nested_tensor(tones), padding=0
+        )
+        langs_padded = torch.nested.to_padded_tensor(
+            torch.nested.nested_tensor(langs), padding=0
+        )
+        mels_padded = torch.nested.to_padded_tensor(
+            torch.nested.nested_tensor(mels), padding=0
+        )
+        mels_sliced_padded = torch.nested.to_padded_tensor(
+            torch.nested.nested_tensor(mels_sliced), padding=0
+        )
 
         batch_dict = {
-            "x": x,
-            "x_lengths": x_lengths,
-            "y": y,
-            "y_lengths": y_lengths,
-            "lang": lang,
-            "tone": tone,
-            "word_pos": word_pos,
-            "syllable_pos": syllable_pos,
-            "spk_embed": spk_embed,
-            "decoder_h": decoder_h,
-            "durations": durations if not torch.eq(durations, 0).all() else None,
+            "x": texts_padded,
+            "x_lengths": text_lengths,
+            "y": mels_padded,
+            "y_lengths": mel_lengths,
+            "z": mels_sliced_padded,
+            "z_lengths": mels_sliced_lengths,
+            "tone": tones_padded,
+            "lang": langs_padded,
         }
 
         return batch_dict

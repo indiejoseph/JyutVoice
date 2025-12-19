@@ -39,7 +39,7 @@ def split_text(text: str) -> List[Tuple[str, bool]]:
 
 def g2p(
     text: str, phoneme=None, padding: bool = True, lang: str = "yue"
-) -> Tuple[List[str], List[int], List[int], List[int], List[int]]:
+) -> Tuple[List[str], List[int], List[int], List[int]]:
     """
     Grapheme to phoneme conversion for multilingual text.
     Splits text into English and Chinese chunks, processes each with appropriate G2P,
@@ -50,7 +50,7 @@ def g2p(
         lang: Language for Chinese chunks, "yue" for Cantonese or "zh" for Mandarin.
 
     Returns:
-        phones, tones, word2ph, word_pos, syllable_pos, lang
+        phones, tones, word2ph, lang
     """
     if phoneme != None:
         raise NotImplementedError("Phoneme input not supported for multilingual G2P.")
@@ -58,10 +58,8 @@ def g2p(
     segments = split_text(text)
     all_phones = []
     all_tones = []
+    all_langs = []
     all_word2ph = []
-    all_word_pos = []
-    all_syllable_pos = []
-    all_lang = []
     total_words = 0
 
     for chunk, is_chinese in segments:
@@ -69,31 +67,23 @@ def g2p(
             continue
         if is_chinese:
             if lang == "yue":
-                phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_yue(
-                    chunk, padding=False
-                )
-                all_lang.extend(lang_ids)
+                phones, tones, word2ph, lang_ids = g2p_yue(chunk, padding=False)
+                all_langs.extend(lang_ids)
             elif lang == "zh":
-                phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_zh(
-                    chunk, padding=False
-                )
-                all_lang.extend(lang_ids)
+                phones, tones, word2ph, lang_ids = g2p_zh(chunk, padding=False)
+                all_langs.extend(lang_ids)
             else:
                 raise ValueError(
                     f"Invalid lang '{lang}' for Chinese. Use 'yue' or 'zh'."
                 )
         else:
-            phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p_en(
-                chunk, padding=False
-            )
-            all_lang.extend(lang_ids)
+            phones, tones, word2ph, lang_ids = g2p_en(chunk, padding=False)
+            all_langs.extend(lang_ids)
 
         # Append to global lists
         all_phones.extend(phones)
         all_tones.extend(tones)
         all_word2ph.extend(word2ph)
-        all_word_pos.extend(word_pos)
-        all_syllable_pos.extend(syllable_pos)
 
         # Update total words
         total_words += len(word2ph)
@@ -103,20 +93,16 @@ def g2p(
         all_phones = ["-"] + all_phones + ["_"]
         all_tones = [0] + all_tones + [0]
         all_word2ph = [1] + all_word2ph + [1]
-        all_word_pos = [0] + all_word_pos + [0]
-        all_syllable_pos = [0] + all_syllable_pos + [0]
-        all_lang = [0] + all_lang + [0]
+        all_langs = [0] + all_langs + [0]
 
-    return all_phones, all_tones, all_word2ph, all_word_pos, all_syllable_pos, all_lang
+    return all_phones, all_tones, all_word2ph, all_langs
 
 
 if __name__ == "__main__":
     # Test
     text = "Hello 世界"
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(text, lang="zh")
+    phones, tones, word2ph, langs = g2p(text, lang="zh")
     print("Text:", text)
     print("Phones:", phones)
     print("Tones:", tones)
     print("Word2ph:", word2ph)
-    print("Word pos:", word_pos)
-    print("Syllable pos:", syllable_pos)

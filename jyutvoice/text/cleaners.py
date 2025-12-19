@@ -109,19 +109,15 @@ def clean_text(text: str, lang: str = "yue", phoneme=None, padding=True):
     else:
         raise ValueError(f"Language {lang} not supported for text cleaning.")
 
-    phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p(
-        norm_text, phoneme, padding=padding
-    )
+    phones, tones, word2ph, lang_ids = g2p(norm_text, phoneme, padding=padding)
 
-    return norm_text, phones, tones, word_pos, syllable_pos, lang_ids
+    return norm_text, phones, tones, lang_ids
 
 
 if __name__ == "__main__":
     text = "佢 邊係 想 辭工 吖 ， 跳下 草裙舞 想 加 人工 之嘛 。"
     jyutping = "keoi5 bin1 hai6 soeng2 ci4 gung1 aa1 , tiu3 haa6 cou2 kwan4 mou5 soeng2 gaa1 jan4 gung1 zi1 maa3 ."
-    norm_text, phones, tones, word_pos, syllable_pos = clean_text(
-        text, lang="yue", phoneme=jyutping
-    )
+    norm_text, phones, tones, lang_ids = clean_text(text, lang="yue", phoneme=jyutping)
     print("Original:", text)
     print("Normalized:", norm_text)
     print("Phones:", phones)

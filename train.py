@@ -1,5 +1,6 @@
 import argparse
-from typing import Any, Dict, Optional, Tuple
+import torch
+from typing import Any, Dict, Tuple
 
 import lightning as L
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
@@ -25,6 +26,14 @@ def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     print(f"Instantiating model...")
     model: LightningModule = cfg["tts"]
+
+    try:
+        model.load_state_dict(
+            torch.load("pretrained_models/checkpoint_0.pt"), strict=False
+        )
+        print("Loaded pretrained model weights from pretrained_models/checkpoint_0.pt")
+    except Exception as e:
+        pass
 
     print("Instantiating callbacks...")
     callbacks: list[Callback] = instantiators.instantiate_callbacks(

@@ -23,18 +23,6 @@ class BaseLightningClass(LightningModule, ABC):
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
 
-        # Get warmup steps from config (default to 1000 if not specified)
-        warmup_steps = getattr(self.hparams, "warmup_steps", 1000)
-
-        # Define warmup function
-        def warmup_lambda(current_step: int):
-            if current_step < warmup_steps:
-                return float(current_step) / float(max(1, warmup_steps))
-            return 1.0
-
-        # Create warmup scheduler
-        warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda)
-
         # Check if main scheduler is configured
         if self.hparams.scheduler not in (None, {}):
             scheduler_args = {}
@@ -55,8 +43,7 @@ class BaseLightningClass(LightningModule, ABC):
             # Combine warmup + main scheduler
             scheduler = SequentialLR(
                 optimizer,
-                schedulers=[warmup_scheduler, main_scheduler],
-                milestones=[warmup_steps],
+                schedulers=[main_scheduler],
             )
 
             return {
@@ -68,48 +55,32 @@ class BaseLightningClass(LightningModule, ABC):
                     "name": "learning_rate",
                 },
             }
-        else:
-            # Only warmup scheduler
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": warmup_scheduler,
-                    "interval": "step",
-                    "frequency": 1,
-                    "name": "learning_rate",
-                },
-            }
+
+        return {"optimizer": optimizer}
 
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]
         y, y_lengths = batch["y"], batch["y_lengths"]
-        lang, tone, word_pos, syllable_pos = (
+        z, y_lengths = batch["z"], batch["y_lengths"]
+        lang, tone = (
             batch["lang"],
             batch["tone"],
-            batch["word_pos"],
-            batch["syllable_pos"],
         )
-        spk_embed = batch["spk_embed"]
-        decoder_h = batch["decoder_h"]
 
-        dur_loss, prior_loss, diff_loss, kl_loss, *_ = self(
+        dur_loss, diff_loss, prior_loss, *_ = self(
             x=x,
             x_lengths=x_lengths,
             y=y,
             y_lengths=y_lengths,
+            z=z,
+            z_lengths=y_lengths,
             lang=lang,
             tone=tone,
-            word_pos=word_pos,
-            syllable_pos=syllable_pos,
-            spk_embed=spk_embed,
-            decoder_h=decoder_h,
-            durations=batch.get("durations", None),
         )
         return {
             "dur_loss": dur_loss,
             "prior_loss": prior_loss,
             "diff_loss": diff_loss,
-            "kl_loss": kl_loss,
         }
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -170,22 +141,9 @@ class BaseLightningClass(LightningModule, ABC):
             sync_dist=True,
             batch_size=batch["x"].shape[0],
         )
-        self.log(
-            "sub_loss/train_kl_loss",
-            loss_dict["kl_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
 
-        # total_loss = sum(loss_dict.values())
-        total_loss = (
-            loss_dict["dur_loss"]
-            + loss_dict["prior_loss"]
-            + (1e-6 * loss_dict["kl_loss"])
-        )
+        total_loss = sum(loss_dict.values())
+
         self.log(
             "loss/train",
             total_loss,
@@ -229,12 +187,8 @@ class BaseLightningClass(LightningModule, ABC):
             batch_size=batch["x"].shape[0],
         )
 
-        # total_loss = sum(loss_dict.values())
-        total_loss = (
-            loss_dict["dur_loss"]
-            + loss_dict["prior_loss"]
-            + (1e-6 * loss_dict["kl_loss"])
-        )
+        total_loss = sum(loss_dict.values())
+
         self.log(
             "loss/val",
             total_loss,
@@ -288,26 +242,15 @@ class BaseLightningClass(LightningModule, ABC):
                     x = one_batch["x"][i].unsqueeze(0).to(self.device)
                     x_lengths = one_batch["x_lengths"][i].unsqueeze(0).to(self.device)
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
+                    y_lengths = one_batch["y_lengths"][i].unsqueeze(0).to(self.device)
                     lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
                     tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
-                    word_pos = one_batch["word_pos"][i].unsqueeze(0).to(self.device)
-                    syllable_pos = (
-                        one_batch["syllable_pos"][i].unsqueeze(0).to(self.device)
-                    )
-                    spk_embed = (
-                        one_batch["spk_embed"][i].unsqueeze(0).to(self.device)
-                        if one_batch.get("spk_embed") is not None
-                        else None
-                    )
                     output = self.synthesise(
-                        x[:, : x_lengths.item()],
-                        x_lengths,
-                        lang[:, : x_lengths.item()],
-                        tone[:, : x_lengths.item()],
-                        word_pos[:, : x_lengths.item()],
-                        syllable_pos[:, : x_lengths.item()],
-                        spk_embed=spk_embed,
-                        prompt_feat=y,
+                        x=x[:, : x_lengths.item()],
+                        x_lengths=x_lengths,
+                        y=y[:, : y_lengths.item()],
+                        lang=lang[:, : x_lengths.item()],
+                        tone=tone[:, : x_lengths.item()],
                         n_timesteps=10,
                     )
                     y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]

@@ -33,7 +33,6 @@ def pinyin_to_phonemes(pinyin_syllables: List[tuple]) -> tuple:
     phonemes = []
     tones = []
     word2ph = []
-    syllable_pos = []
 
     try:
         for initial, final in pinyin_syllables:
@@ -44,11 +43,9 @@ def pinyin_to_phonemes(pinyin_syllables: List[tuple]) -> tuple:
                 phonemes.append(initial)
                 tones.append(0)
                 word2ph.append(1)
-                syllable_pos.append(0)
             else:
                 tone = 0
                 num_phones = 0
-                syllable_pos_index = 1
 
                 if final and final[-1].isdigit():
                     tone = int(final[-1])
@@ -57,14 +54,10 @@ def pinyin_to_phonemes(pinyin_syllables: List[tuple]) -> tuple:
                 if initial:
                     phonemes.append(initial)
                     tones.append(tone)
-                    syllable_pos.append(syllable_pos_index)  # Initial
-                    syllable_pos_index += 1
                     num_phones += 1
                 if final:
                     phonemes.append(final)
                     tones.append(tone)
-                    syllable_pos.append(syllable_pos_index)  # Final
-                    syllable_pos_index += 1
                     num_phones += 1
 
                 word2ph.append(num_phones)
@@ -73,7 +66,7 @@ def pinyin_to_phonemes(pinyin_syllables: List[tuple]) -> tuple:
             f"Failed to convert pinyin syllables: {pinyin_syllables}"
         ) from e
 
-    return phonemes, tones, word2ph, syllable_pos
+    return phonemes, tones, word2ph
 
 
 def g2p(
@@ -87,8 +80,6 @@ def g2p(
     tones = []
     word2ph = []
     ws_labels = []
-    word_pos = []
-    syllable_pos = []
     word_pinyin = []
 
     if pinyin is None:
@@ -109,13 +100,10 @@ def g2p(
             index = end_index
 
     for word, pinyin in word_pinyin:
-        temp_phones, temp_tones, temp_word2ph, temp_syllable_pos = pinyin_to_phonemes(
-            pinyin
-        )
+        temp_phones, temp_tones, temp_word2ph = pinyin_to_phonemes(pinyin)
         phones += temp_phones
         tones += temp_tones
         word2ph += temp_word2ph
-        syllable_pos += temp_syllable_pos
 
         if len(word) == 0:
             continue
@@ -126,42 +114,30 @@ def g2p(
         elif len(word) > 2:
             ws_labels.extend([1] + [2] * (len(word) - 2) + [3])  # Begin, Middle, End
 
-    for i, ws_label in enumerate(ws_labels):
-        num_phones = word2ph[i]
-        word_pos.extend([ws_label] * num_phones)
-
     # Add padding
     if padding:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
-        word_pos = [0] + word_pos + [0]
-        syllable_pos = [0] + syllable_pos + [0]
 
-    assert (
-        len(phones) == len(tones) == len(word_pos) == len(syllable_pos)
+    assert len(phones) == len(
+        tones
     ), "Phones, tones, word positions, and syllable positions must have the same length."
 
-    lang_ids = [1] * len(phones)  # 1 for Mandarin
+    lang_ids = [2] * len(phones)  # 2 for Mandarin
 
-    return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
+    return phones, tones, word2ph, lang_ids
 
 
 if __name__ == "__main__":
-    text = "你好 世界 ！"
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(text)
+    text = "你好世界！"
+    phones, tones, word2ph, lang_ids = g2p(text)
     print("Text:", text)
     print("Phones:", phones)
     print("Tones:", tones)
     print("Word2ph:", word2ph)
-    print("Word pos:", word_pos)
-    print("Syllable pos:", syllable_pos)
 
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(
-        text, pinyin="ni3 hao3 shi4 jie4 !"
-    )
+    phones, tones, word2ph, lang_ids = g2p(text, pinyin="ni3 hao3 shi4 jie4 !")
     print("Text with provided pinyin:", text)
     print("Phones:", phones)
     print("Tones:", tones)
     print("Word2ph:", word2ph)
-    print("Word pos:", word_pos)
-    print("Syllable pos:", syllable_pos)

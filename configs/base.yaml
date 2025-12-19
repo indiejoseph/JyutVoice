@@ -1,138 +1,89 @@
-# fixed params
-n_feats: 80
+# model config
+gin_channels: 256
+hidden_channels: 256
+filter_channels: 1024
+kernel_size: 3
+n_heads: 4
 p_dropout: 0.1
-filter_channels_dp: 256
-token_frame_rate: 25
-token_mel_ratio: 2
-# stream related params
-chunk_size: 25 # streaming inference chunk size, in token
-num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
 
-# audio processing params
-sample_rate: 24000
-hop_length: 480
-win_length: 1920
-n_fft: 1920
+# mel config
+sample_rate: 44100
+n_fft: 2048
+win_length: 2048
+hop_length: 512
 f_min: 0
-f_max: 8000
-add_blank: true
-spk_embed_dim: 192
-lang_embed_dim: 32
-
-hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
-  in_channels: 80
-  base_channels: 512
-  nb_harmonics: 8
-  sampling_rate: !ref <sample_rate>
-  nsf_alpha: 0.1
-  nsf_sigma: 0.003
-  nsf_voiced_threshold: 10
-  upsample_rates: [8, 5, 3]
-  upsample_kernel_sizes: [16, 11, 7]
-  istft_params:
-    n_fft: 16
-    hop_len: 4
-  resblock_kernel_sizes: [3, 7, 11]
-  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-  source_resblock_kernel_sizes: [7, 7, 11]
-  source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-  lrelu_slope: 0.1
-  audio_limit: 0.99
-  f0_predictor: !new:jyutvoice.hifigan.f0_predictor.ConvRNNF0Predictor
-    num_class: 1
-    in_channels: 80
-    cond_channels: 512
+f_max: null
+pad: 0
+n_mels: 128
+center: false
+pad_mode: "reflect"
+mel_scale: "slaney"
 
 tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
+  gin_channels: !ref <gin_channels>
+  mel_channels: !ref <n_mels>
   encoder: !new:jyutvoice.models.text_encoder.TextEncoder
-    encoder_type: RoPE Encoder
-    encoder_params: !new:omegaconf.DictConfig
-      content:
-        n_feats: !ref <n_feats>
-        n_channels: 192
-        filter_channels: 768
-        filter_channels_dp: !ref <filter_channels_dp>
-        n_heads: 2
-        n_layers: 6
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-        prenet: true
-
-    duration_predictor_params: !new:omegaconf.DictConfig
-      content:
-        filter_channels_dp: !ref <filter_channels_dp>
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-
     n_vocab: 97
-    n_lang: 3 # Cantonese, Mandarin, English
+    n_lang: 4 # Pad + Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
-    spk_embed_dim: !ref <n_feats>
-    lang_embed_dim: !ref <lang_embed_dim>
+    out_channels: !ref <n_mels>
+    hidden_channels: !ref <hidden_channels>
+    filter_channels: !ref <filter_channels>
+    n_heads: !ref <n_heads>
+    n_layers: 3
+    kernel_size: !ref <kernel_size>
+    p_dropout: !ref <p_dropout>
+    gin_channels: !ref <gin_channels>
 
-  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
-    idim: !ref <n_feats>
-    gst_tokens: 10
-    gst_token_dim: 256
-    gst_heads: 4
+  ref_encoder: !new:jyutvoice.models.reference_encoder.MelStyleEncoder
+    n_mel_channels: !ref <n_mels>
+    style_hidden: 128
+    style_vector_dim: !ref <gin_channels>
+    style_kernel_size: 5
+    style_head: 2
+    dropout: 0.25
 
-  decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
-    in_channels: 240
-    n_spks: 1
-    spk_emb_dim: 80
-    cfm_params: !new:omegaconf.DictConfig
-      content:
-        sigma_min: 1e-06
-        solver: "euler"
-        t_scheduler: "cosine"
-        training_cfg_rate: 0.2
-        inference_cfg_rate: 0.7
-        reg_loss_type: "l1"
-    estimator: !new:jyutvoice.flow.decoder.CausalConditionalDecoder
-      in_channels: 320
-      out_channels: 80
-      channels: [256]
-      dropout: 0.0
-      attention_head_dim: 64
-      n_blocks: 4
-      num_mid_blocks: 12
-      num_heads: 8
-      act_fn: "gelu"
-      static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
-      num_decoding_left_chunks: !ref <num_decoding_left_chunks>
+  dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
+    in_channels: !ref <hidden_channels>
+    filter_channels: !ref <filter_channels>
+    kernel_size: !ref <kernel_size>
+    p_dropout: 0.5
+    gin_channels: !ref <gin_channels>
 
-  freeze_encoder: false
-  freeze_decoder: true
-  output_size: 80
-  spk_embed_dim: !ref <spk_embed_dim>
+  decoder: !new:jyutvoice.models.flow_matching.CFMDecoder
+    noise_channels: !ref <n_mels>
+    cond_channels: !ref <n_mels>
+    hidden_channels: !ref <hidden_channels>
+    out_channels: !ref <n_mels>
+    filter_channels: !ref <filter_channels>
+    n_heads: !ref <n_heads>
+    n_layers: 6
+    kernel_size: !ref <kernel_size>
+    p_dropout: !ref <p_dropout>
+    gin_channels: !ref <gin_channels>
+
   # pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
     lr: 2e-4
     weight_decay: 0.0
   scheduler: null
-  warmup_steps: 100 # Number of warmup steps for learning rate
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
-  dataset_path: tmp/dataset_processed
-  # speaker_embedding_model_path: pretrained_models/campplus.onnx
-  # flow_encoder_path: pretrained_models/flow_encoder.pt
-  # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
+  dataset_path: tmp/dummy_dataset_resaved
   batch_size: 8
   num_workers: 2
   pin_memory: true
   dataset_valid_ratio: 0.001
   seed: 42
   load_durations: false
-  add_blank: !ref <add_blank>
   n_fft: !ref <n_fft>
-  n_feats: !ref <n_feats>
+  n_feats: !ref <n_mels>
   sample_rate: !ref <sample_rate>
   hop_length: !ref <hop_length>
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
-  token_mel_ratio: !ref <token_mel_ratio>
 
 trainer: !new:lightning.Trainer
   accelerator: auto
@@ -165,11 +116,11 @@ callbacks:
 
 # WandB Logging Configuration
 logger:
-  wandb:
-    _target_: lightning.pytorch.loggers.wandb.WandbLogger
-    name: jyutvoice-tts # Project name
-    project: jyutvoice-tts # WandB project name
-    entity: null # Set to your WandB team name if you have one
-    log_model: false # Set to true to log model checkpoints
-    prefix: ""
-    notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"
+  # wandb:
+  #   _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  #   name: jyutvoice-tts # Project name
+  #   project: jyutvoice-tts # WandB project name
+  #   entity: null # Set to your WandB team name if you have one
+  #   log_model: false # Set to true to log model checkpoints
+  #   prefix: ""
+  #   notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"

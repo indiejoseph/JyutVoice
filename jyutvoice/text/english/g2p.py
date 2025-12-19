@@ -217,8 +217,6 @@ def text_to_words(text):
 def g2p(text, phoneme=None, padding=True):
     phones = []
     tones = []
-    syllable_pos = []
-    word_pos = []
     ws_labels = []
     phone_len = []
     words = text_to_words(text)
@@ -259,20 +257,6 @@ def g2p(text, phoneme=None, padding=True):
         phone_len.append(len(temp_phones))
         ws_labels.append(1)  # English words are always single units
 
-        # Build syllable_pos for this word
-        temp_syllable_pos = []
-        if len(temp_phones) == 1 and temp_phones[0] in punctuations:
-            temp_syllable_pos = [0]
-        else:
-            for j in range(len(temp_phones)):
-                if j == 0:
-                    temp_syllable_pos.append(1)
-                elif j == len(temp_phones) - 1:
-                    temp_syllable_pos.append(3)
-                else:
-                    temp_syllable_pos.append(2)
-        syllable_pos += temp_syllable_pos
-
     word2ph = []
     for token, pl in zip(words, phone_len):
         word_len = len(token)
@@ -283,31 +267,19 @@ def g2p(text, phoneme=None, padding=True):
     assert len(phones) == len(tones), text
     assert len(phones) == sum(word2ph), text
 
-    word_pos = []
-    idx = 0
-    for word_idx in range(len(words)):
-        ws_label = ws_labels[word_idx]
-        word_len = len(words[word_idx])
-        for j in range(word_len):
-            num_phones = word2ph[idx]
-            word_pos.extend([ws_label] * num_phones)
-            idx += 1
-
     if padding:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
-        word_pos = [0] + word_pos + [0]
-        syllable_pos = [0] + syllable_pos + [0]
         word2ph = [1] + word2ph + [1]
 
-    lang_ids = [2] * len(phones)  # 2 for English
+    lang_ids = [3] * len(phones)  # 3 for English
 
-    return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
+    return phones, tones, word2ph, lang_ids
 
 
 if __name__ == "__main__":
     text = "In this paper, we propose 1 DSPGAN, a GAN-based universal vocoder."
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(text)
+    phones, tones, word2ph, lang_ids = g2p(text)
     print("Text:", text)
     print("Phones:", phones)
     print("Tones:", tones)

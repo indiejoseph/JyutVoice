@@ -23,7 +23,6 @@ def jyutping_to_onsets_nucleuses_codas_tones(jyutping_syllables):
     onsets_nucleuses_codas = []
     tones = []
     word2ph = []
-    syllable_pos = []
 
     try:
         for syllable in jyutping_syllables:
@@ -31,36 +30,28 @@ def jyutping_to_onsets_nucleuses_codas_tones(jyutping_syllables):
                 onsets_nucleuses_codas.append(syllable)
                 tones.append(0)
                 word2ph.append(1)  # Add 1 for punctuation
-                syllable_pos.append(0)  # Punctuation has no syllable position
             else:
                 onset, nucleus, coda, tone = parse_jyutping(syllable)
                 num_phones = 0
-                syllable_pos_index = 1
 
                 if onset != "":
                     onsets_nucleuses_codas.append(onset)
                     tones.append(int(tone))
-                    syllable_pos.append(syllable_pos_index)  # Onset
-                    syllable_pos_index += 1
                     num_phones += 1
                 if nucleus != "":
                     onsets_nucleuses_codas.append(nucleus)
                     tones.append(int(tone))
-                    syllable_pos.append(syllable_pos_index)  # Nucleus
-                    syllable_pos_index += 1
                     num_phones += 1
                 if coda != "":
                     onsets_nucleuses_codas.append(coda)
                     tones.append(int(tone))
-                    syllable_pos.append(syllable_pos_index)  # Coda
-                    syllable_pos_index += 1
                     num_phones += 1
                 word2ph.append(num_phones)
     except Exception as e:
         raise ValueError(f"Failed to parse jyutping: {jyutping_syllables}") from e
 
     assert len(onsets_nucleuses_codas) == len(tones)
-    return onsets_nucleuses_codas, tones, word2ph, syllable_pos
+    return onsets_nucleuses_codas, tones, word2ph
 
 
 def get_jyutping(text):
@@ -105,8 +96,6 @@ def g2p(
     tones = []
     word2ph = []
     ws_labels = []
-    word_pos = []
-    syllable_pos = []
     word_jyutping = []
 
     if jyutping is None:
@@ -127,13 +116,12 @@ def g2p(
             index = end_index
 
     for word, jyutping in word_jyutping:
-        temp_phones, temp_tones, temp_word2ph, temp_syllable_pos = (
+        temp_phones, temp_tones, temp_word2ph = (
             jyutping_to_onsets_nucleuses_codas_tones(jyutping)
         )
         phones += temp_phones
         tones += temp_tones
         word2ph += temp_word2ph
-        syllable_pos += temp_syllable_pos
 
         if len(word) == 0:
             continue
@@ -144,35 +132,27 @@ def g2p(
         elif len(word) > 2:
             ws_labels.extend([1] + [2] * (len(word) - 2) + [3])  # Begin, Middle, End
 
-    for i, ws_label in enumerate(ws_labels):
-        num_phones = word2ph[i]
-        word_pos.extend([ws_label] * num_phones)
-
     # Add padding
     if padding:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
-        word_pos = [0] + word_pos + [0]
-        syllable_pos = [0] + syllable_pos + [0]
         word2ph = [1] + word2ph + [1]
 
-    assert (
-        len(phones) == len(tones) == len(word_pos) == len(syllable_pos)
-    ), "Phones, tones, word positions, and syllable positions must have the same length."
+    assert len(phones) == len(tones), "Phones and tones must have the same length."
 
-    lang_ids = [0] * len(phones)  # 0 for Cantonese
+    lang_ids = [1] * len(phones)  # 1 for Cantonese
 
-    return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
+    return phones, tones, word2ph, lang_ids
 
 
 if __name__ == "__main__":
-    text = "佢 邊係 想 辭工 吖 , 跳下 草裙舞 想 加 人工 之嘛 ."
+    text = "佢邊係想辭工吖,跳下草裙舞想加人工之嘛."
     jyutping = "keoi5 bin1 hai6 soeng2 ci4 gung1 aa1 , tiu3 haa6 cou2 kwan4 mou5 soeng2 gaa1 jan4 gung1 zi1 maa3 ."
 
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(text)
+    phones, tones, word2ph, lang_ids = g2p(text)
 
-    print(phones, tones, word2ph, word_pos, syllable_pos)
+    print(phones, tones, word2ph, lang_ids)
 
-    phones, tones, word2ph, word_pos, syllable_pos = g2p(text, jyutping)
+    phones, tones, word2ph, lang_ids = g2p(text, jyutping)
 
-    print(phones, tones, word2ph, word_pos, syllable_pos)
+    print(phones, tones, word2ph, lang_ids)

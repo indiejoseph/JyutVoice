@@ -27,12 +27,12 @@ def text_to_sequence(text, lang: str, phone=None):
       List of integers corresponding to the symbols in the text
     """
 
-    _, phones, tones, word_pos, syllable_pos, lang_ids = clean_text(
+    _, phones, tones, lang_ids = clean_text(
         text, lang=lang, phoneme=phone, padding=True
     )
     phone_token_ids = cleaned_text_to_sequence(phones)
 
-    return phone_token_ids, tones, word_pos, syllable_pos, lang_ids
+    return phone_token_ids, tones, lang_ids
 
 
 def cleaned_text_to_sequence(cleaned_text):
