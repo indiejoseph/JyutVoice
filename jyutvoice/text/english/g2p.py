@@ -10,8 +10,7 @@ current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
 _g2p = G2p()
-LOCAL_PATH = "./bert/deberta-v3-large"
-tokenizer = DebertaV2Tokenizer.from_pretrained(LOCAL_PATH)
+tokenizer = DebertaV2Tokenizer.from_pretrained("microsoft/deberta-v3-large")
 
 arpa = {
     "AH0",
