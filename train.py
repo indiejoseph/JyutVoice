@@ -29,10 +29,14 @@ def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     try:
         model.load_state_dict(
-            torch.load("pretrained_models/checkpoint_0.pt"), strict=False
+            torch.load("pretrained_models/sfm-pretrained.pt", weights_only=False),
+            strict=False,
         )
-        print("Loaded pretrained model weights from pretrained_models/checkpoint_0.pt")
+        print(
+            "Loaded pretrained model weights from pretrained_models/sfm-pretrained.pt"
+        )
     except Exception as e:
+        print("Loading pretrained model error:", e)
         pass
 
     print("Instantiating callbacks...")
