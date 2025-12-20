@@ -64,15 +64,48 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
   # pretrain_path: pretrained_models/pretrain.pt # Path to pretrained checkpoint for transfer learning
   optimizer: !name:torch.optim.AdamW
-    lr: 2e-4
+    lr: 5e-5
     weight_decay: 0.0
   scheduler: null
+  warmup_steps: 300 # Number of warmup steps for learning rate
+
+vocoder: !new:jyutvoice.vocoders.vocos.models.model.Vocos
+  vocos_config: !new:jyutvoice.vocoders.vocos.config.VocosConfig
+    input_channels: 128
+    dim: 512
+    intermediate_dim: 1536
+    num_layers: 8
+  mel_config: !new:jyutvoice.vocoders.vocos.config.MelConfig
+    sample_rate: !ref <sample_rate>
+    n_fft: !ref <n_fft>
+    win_length: !ref <win_length>
+    hop_length: !ref <hop_length>
+    f_min: !ref <f_min>
+    f_max: !ref <f_max>
+    pad: !ref <pad>
+    n_mels: !ref <n_mels>
+    center: !ref <center>
+    pad_mode: !ref <pad_mode>
+    mel_scale: !ref <mel_scale>
+
+mel_extractor: !new:jyutvoice.utils.audio.LogMelSpectrogram
+  sample_rate: !ref <sample_rate>
+  n_fft: !ref <n_fft>
+  win_length: !ref <win_length>
+  hop_length: !ref <hop_length>
+  f_min: !ref <f_min>
+  f_max: !ref <f_max>
+  pad: !ref <pad>
+  n_mels: !ref <n_mels>
+  center: !ref <center>
+  pad_mode: !ref <pad_mode>
+  mel_scale: !ref <mel_scale>
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
   dataset_path: tmp/dummy_dataset_resaved
-  batch_size: 8
-  num_workers: 2
+  batch_size: 32
+  num_workers: 8
   pin_memory: true
   dataset_valid_ratio: 0.001
   seed: 42
@@ -84,17 +117,21 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
+  center: !ref <center>
+  pad: !ref <pad>
+  pad_mode: !ref <pad_mode>
+  mel_scale: !ref <mel_scale>
 
 trainer: !new:lightning.Trainer
   accelerator: auto
   devices: 1
   precision: bf16-mixed
-  max_epochs: 1
+  max_epochs: 2
   detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
-  log_every_n_steps: 1
+  log_every_n_steps: 10
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 0 # have to be 0 for testing
-  gradient_clip_val: 1.0
+  gradient_clip_val: 3.0
   gradient_clip_algorithm: "norm"
 
 callbacks:
@@ -123,4 +160,4 @@ logger:
   #   entity: null # Set to your WandB team name if you have one
   #   log_model: false # Set to true to log model checkpoints
   #   prefix: ""
-  #   notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"
+  #   notes: "JyutVoice TTS with StableTTS"

@@ -23,6 +23,9 @@ def jyutping_to_onsets_nucleuses_codas_tones(jyutping_syllables):
     onsets_nucleuses_codas = []
     tones = []
     word2ph = []
+    jyutping_syllables = [
+        c for s in jyutping_syllables for c in s.split() if c
+    ]  # 卅 -> saa1 aa6
 
     try:
         for syllable in jyutping_syllables:
@@ -76,6 +79,9 @@ def get_jyutping(text):
 
 
 def parse_jyutping(jyutping: str):
+    if re.match(r"^hm[1-6]$", jyutping):
+        return "h", "", "m", jyutping[-1]
+
     x = pycantonese.parse_jyutping(jyutping)
 
     if not x or len(x) == 0:

@@ -22,6 +22,7 @@ class JyutVoiceTTS(BaseLightningClass):
         mel_channels,
         optimizer=None,
         scheduler=None,
+        warmup_steps=200,
     ):
         super().__init__()
 
@@ -101,7 +102,7 @@ class JyutVoiceTTS(BaseLightningClass):
         c = self.ref_encoder(y, None)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        x, mu_x, x_mask = self.encoder(x, x_lengths, lang, tone)
+        x, mu_x, x_mask = self.encoder(x, tone, lang, c, x_lengths)
         logw = self.dp(x, x_mask, c)
         w = torch.exp(logw) * x_mask
         w_ceil = torch.ceil(w) * length_scale
