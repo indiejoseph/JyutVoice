@@ -23,6 +23,18 @@ class BaseLightningClass(LightningModule, ABC):
     def configure_optimizers(self) -> Any:
         optimizer = self.hparams.optimizer(params=self.parameters())
 
+        # Get warmup steps from config (default to 1000 if not specified)
+        warmup_steps = getattr(self.hparams, "warmup_steps", 1000)
+
+        # Define warmup function
+        def warmup_lambda(current_step: int):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            return 1.0
+
+        # Create warmup scheduler
+        warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda)
+
         # Check if main scheduler is configured
         if self.hparams.scheduler not in (None, {}):
             scheduler_args = {}
@@ -56,32 +68,38 @@ class BaseLightningClass(LightningModule, ABC):
                 },
             }
 
-        return {"optimizer": optimizer}
+        else:
+            # Only warmup scheduler
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": warmup_scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "learning_rate",
+                },
+            }
 
     def get_losses(self, batch):
         x, x_lengths = batch["x"], batch["x_lengths"]
         y, y_lengths = batch["y"], batch["y_lengths"]
-        z, y_lengths = batch["z"], batch["y_lengths"]
+        z, z_lengths = batch["z"], batch["z_lengths"]
         lang, tone = (
             batch["lang"],
             batch["tone"],
         )
 
-        dur_loss, diff_loss, prior_loss, *_ = self(
+        loss_dict, value_dict = self(
             x=x,
             x_lengths=x_lengths,
             y=y,
             y_lengths=y_lengths,
             z=z,
-            z_lengths=y_lengths,
+            z_lengths=z_lengths,
             lang=lang,
             tone=tone,
         )
-        return {
-            "dur_loss": dur_loss,
-            "prior_loss": prior_loss,
-            "diff_loss": diff_loss,
-        }
+        return loss_dict, value_dict
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         self.ckpt_loaded_epoch = checkpoint[
@@ -89,8 +107,7 @@ class BaseLightningClass(LightningModule, ABC):
         ]  # pylint: disable=attribute-defined-outside-init
 
     def training_step(self, batch: Any, batch_idx: int):
-        loss_dict = self.get_losses(batch)
-        step = float(self.global_step)
+        loss_dict, value_dict = self.get_losses(batch)
 
         # Log current learning rate
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
@@ -114,33 +131,26 @@ class BaseLightningClass(LightningModule, ABC):
             batch_size=batch["x"].shape[0],
         )
 
-        self.log(
-            "sub_loss/train_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/train_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/train_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
+        for key, value in loss_dict.items():
+            self.log(
+                f"sub_loss/train_{key}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
+        for key, value in value_dict.items():
+            self.log(
+                f"train_{key}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
 
         total_loss = sum(loss_dict.values())
 
@@ -158,34 +168,27 @@ class BaseLightningClass(LightningModule, ABC):
         return {"loss": total_loss, "log": loss_dict}
 
     def validation_step(self, batch: Any, batch_idx: int):
-        loss_dict = self.get_losses(batch)
-        self.log(
-            "sub_loss/val_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/val_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/val_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
+        loss_dict, value_dict = self.get_losses(batch)
+        for key, value in loss_dict.items():
+            self.log(
+                f"sub_loss/val_{key}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
+        for key, value in value_dict.items():
+            self.log(
+                f"val_{key}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
 
         total_loss = sum(loss_dict.values())
 
@@ -245,7 +248,7 @@ class BaseLightningClass(LightningModule, ABC):
                     y_lengths = one_batch["y_lengths"][i].unsqueeze(0).to(self.device)
                     lang = one_batch["lang"][i].unsqueeze(0).to(self.device)
                     tone = one_batch["tone"][i].unsqueeze(0).to(self.device)
-                    output = self.synthesise(
+                    output, tp, sigma_p = self.synthesise(
                         x=x[:, : x_lengths.item()],
                         x_lengths=x_lengths,
                         y=y[:, : y_lengths.item()],

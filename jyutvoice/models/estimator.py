@@ -114,7 +114,7 @@ class Decoder(nn.Module):
         )
 
         self.in_proj = nn.Conv1d(
-            hidden_channels + noise_channels, hidden_channels, 1
+            noise_channels, hidden_channels, 1
         )  # cat noise and encoder output as input
         self.blocks = nn.ModuleList(
             [
@@ -133,19 +133,13 @@ class Decoder(nn.Module):
         self.final_proj = nn.Conv1d(hidden_channels, out_channels, 1)
 
         # prenet for encoder output
-        self.cond_proj = nn.Sequential(
-            nn.Conv1d(
-                cond_channels, filter_channels, kernel_size, padding=kernel_size // 2
-            ),
-            nn.SiLU(inplace=True),
-            nn.Conv1d(
-                filter_channels, filter_channels, kernel_size, padding=kernel_size // 2
-            ),  # add about 3M params
-            nn.SiLU(inplace=True),
-            nn.Conv1d(
-                filter_channels, hidden_channels, kernel_size, padding=kernel_size // 2
-            ),
-        )
+        # self.cond_proj = nn.Sequential(
+        #     nn.Conv1d(cond_channels, filter_channels, kernel_size, padding=kernel_size//2),
+        #     nn.SiLU(inplace=True),
+        #     nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2), # add about 3M params
+        #     nn.SiLU(inplace=True),
+        #     nn.Conv1d(filter_channels, hidden_channels, kernel_size, padding=kernel_size//2)
+        # )
 
         if use_lsc:
             assert n_layers % 2 == 0
@@ -169,7 +163,7 @@ class Decoder(nn.Module):
             nn.init.constant_(block.block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.block.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, t, x, mask, mu, c):
+    def forward(self, t, x, mask, c):
         """Forward pass of the DiT model.
 
         Args:
@@ -184,9 +178,6 @@ class Decoder(nn.Module):
         """
 
         t = self.time_mlp(self.time_embeddings(t))
-        mu = self.cond_proj(mu)
-
-        x = torch.cat((x, mu), dim=1)
         x = self.in_proj(x)
 
         lsc_outputs = [] if self.use_lsc else None

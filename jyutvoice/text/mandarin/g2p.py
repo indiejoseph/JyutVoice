@@ -8,6 +8,7 @@ from jyutvoice.text.symbols import punctuations
 
 
 finals_converter = FinalsConverter()
+punctuations_pattern = re.compile(r"^[{}]+$".format(re.escape("".join(punctuations))))
 
 
 def text_to_pinyin(word: str) -> List[tuple]:
@@ -16,6 +17,17 @@ def text_to_pinyin(word: str) -> List[tuple]:
     finals_list = pypinyin.pinyin(word, style=Style.FINALS_TONE3, strict=False)
     initials_flat = [item[0] for item in initials_list]
     finals_flat = [item[0] for item in finals_list]
+    # if initial or finals are punctuations, split the punctuation, eg: [",'"] -> [",", "'"]
+    initials_flat = [
+        char
+        for init in initials_flat
+        for char in (list(init) if punctuations_pattern.match(init) else [init])
+    ]
+    finals_flat = [
+        char
+        for fin in finals_flat
+        for char in (list(fin) if punctuations_pattern.match(fin) else [fin])
+    ]
     return list(zip(initials_flat, finals_flat))
 
 

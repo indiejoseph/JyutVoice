@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-    
+
+
 class Conv1dGLU(nn.Module):
     """
     Conv1d + GLU(Gated Linear Unit) with residual connection.
@@ -10,7 +11,12 @@ class Conv1dGLU(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, dropout):
         super(Conv1dGLU, self).__init__()
         self.out_channels = out_channels
-        self.conv1 = nn.Conv1d(in_channels, 2 * out_channels, kernel_size=kernel_size, padding=kernel_size // 2)
+        self.conv1 = nn.Conv1d(
+            in_channels,
+            2 * out_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -21,7 +27,8 @@ class Conv1dGLU(nn.Module):
         x = residual + self.dropout(x)
         return x
 
-# modified from https://github.com/RVC-Boss/GPT-SoVITS/blob/main/GPT_SoVITS/module/modules.py#L766    
+
+# modified from https://github.com/RVC-Boss/GPT-SoVITS/blob/main/GPT_SoVITS/module/modules.py#L766
 class MelStyleEncoder(nn.Module):
     """MelStyleEncoder"""
 
@@ -57,10 +64,7 @@ class MelStyleEncoder(nn.Module):
         )
 
         self.slf_attn = nn.MultiheadAttention(
-            self.hidden_dim,
-            self.n_head,
-            self.dropout,
-            batch_first=True
+            self.hidden_dim, self.n_head, self.dropout, batch_first=True
         )
 
         self.fc = nn.Linear(self.hidden_dim, self.out_dim)
@@ -69,7 +73,9 @@ class MelStyleEncoder(nn.Module):
         if mask is None:
             return torch.mean(x, dim=1)
         else:
-            return torch.sum(x * ~mask.unsqueeze(-1), dim=1) / (~mask).sum(dim=1).unsqueeze(1)
+            return torch.sum(x * ~mask.unsqueeze(-1), dim=1) / (~mask).sum(
+                dim=1
+            ).unsqueeze(1)
 
     def forward(self, x, x_mask=None):
         x = x.transpose(1, 2)
@@ -80,9 +86,10 @@ class MelStyleEncoder(nn.Module):
         x = x.transpose(1, 2)
         x = self.temporal(x)
         x = x.transpose(1, 2)
+
         # self-attention
         if x_mask is not None:
-            x_mask = ~x_mask.squeeze(1).to(torch.bool)   
+            x_mask = ~x_mask.squeeze(1).to(torch.bool)
         x, _ = self.slf_attn(x, x, x, key_padding_mask=x_mask, need_weights=False)
         # fc
         x = self.fc(x)
@@ -90,7 +97,8 @@ class MelStyleEncoder(nn.Module):
         w = self.temporal_avg_pool(x, mask=x_mask)
 
         return w
-    
+
+
 # Attention Pool version of MelStyleEncoder, not used
 class AttnMelStyleEncoder(nn.Module):
     """MelStyleEncoder"""
@@ -127,19 +135,18 @@ class AttnMelStyleEncoder(nn.Module):
         )
 
         self.slf_attn = nn.MultiheadAttention(
-            self.hidden_dim,
-            self.n_head,
-            self.dropout,
-            batch_first=True
+            self.hidden_dim, self.n_head, self.dropout, batch_first=True
         )
 
         self.fc = nn.Linear(self.hidden_dim, self.out_dim)
-        
+
     def temporal_avg_pool(self, x, mask=None):
         if mask is None:
             return torch.mean(x, dim=1)
         else:
-            return torch.sum(x * ~mask.unsqueeze(-1), dim=1) / (~mask).sum(dim=1).unsqueeze(1)
+            return torch.sum(x * ~mask.unsqueeze(-1), dim=1) / (~mask).sum(
+                dim=1
+            ).unsqueeze(1)
 
     def forward(self, x, x_mask=None):
         x = x.transpose(1, 2)
@@ -153,7 +160,9 @@ class AttnMelStyleEncoder(nn.Module):
         # self-attention
         if x_mask is not None:
             x_mask = ~x_mask.squeeze(1).to(torch.bool)
-            zeros = torch.zeros(x_mask.size(0), 1, device=x_mask.device, dtype=x_mask.dtype)
+            zeros = torch.zeros(
+                x_mask.size(0), 1, device=x_mask.device, dtype=x_mask.dtype
+            )
             x_attn_mask = torch.cat((zeros, x_mask), dim=1)
         else:
             x_attn_mask = None

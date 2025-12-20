@@ -2,6 +2,7 @@ import math
 import datetime as dt
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from jyutvoice.utils.model import (
     sequence_mask,
     generate_path,
@@ -22,6 +23,7 @@ class JyutVoiceTTS(BaseLightningClass):
         mel_channels,
         optimizer=None,
         scheduler=None,
+        warmup_steps=200,
     ):
         super().__init__()
 
@@ -51,6 +53,7 @@ class JyutVoiceTTS(BaseLightningClass):
         y=None,
         n_timesteps=10,
         temperature=1.0,
+        alpha=1.0,
         length_scale=1.0,
         solver=None,
         cfg=1.0,
@@ -101,7 +104,7 @@ class JyutVoiceTTS(BaseLightningClass):
         c = self.ref_encoder(y, None)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        x, mu_x, x_mask = self.encoder(x, x_lengths, lang, tone)
+        x, mu_x, x_mask = self.encoder(x, tone, lang, c, x_lengths)
         logw = self.dp(x, x_mask, c)
         w = torch.exp(logw) * x_mask
         w_ceil = torch.ceil(w) * length_scale
@@ -116,21 +119,28 @@ class JyutVoiceTTS(BaseLightningClass):
         # Align encoded text and get mu_y
         mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
+        x = torch.matmul(attn.squeeze(1).transpose(1, 2), x.transpose(1, 2))
+        x = x.transpose(1, 2)
+        mu_y, sfm_params = self.encoder.forward_smooth(x, y_mask)
         encoder_outputs = mu_y[:, :, :y_max_length]
 
         # Generate sample tracing the probability flow
+        # Generate sample tracing the probability flow
         if cfg == 1.0:
-            decoder_outputs = self.decoder(
-                mu_y, y_mask, n_timesteps, temperature, c, solver
+            decoder_outputs, tp, sigma_p = self.decoder(
+                sfm_params, y_mask, n_timesteps, temperature, alpha, c, solver
             )
         else:
-            cfg_kwargs = {
-                "fake_speaker": self.fake_speaker,
-                "fake_content": self.fake_content,
-                "cfg_strength": cfg,
-            }
-            decoder_outputs = self.decoder(
-                mu_y, y_mask, n_timesteps, temperature, c, solver, cfg_kwargs
+            cfg_kwargs = {"fake_speaker": self.fake_speaker, "cfg_strength": cfg}
+            decoder_outputs, tp, sigma_p = self.decoder(
+                sfm_params,
+                y_mask,
+                n_timesteps,
+                temperature,
+                alpha,
+                c,
+                solver,
+                cfg_kwargs,
             )
 
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
@@ -138,14 +148,18 @@ class JyutVoiceTTS(BaseLightningClass):
         t = (dt.datetime.now() - t).total_seconds()
         rtf = t * 24000 / (decoder_outputs.shape[-1] * 480)
 
-        return {
-            "encoder_outputs": encoder_outputs,
-            "decoder_outputs": decoder_outputs,
-            "attn": attn,
-            "mel": decoder_outputs,
-            "mel_lengths": y_lengths,
-            "rtf": rtf,
-        }
+        return (
+            {
+                "encoder_outputs": encoder_outputs,
+                "decoder_outputs": decoder_outputs,
+                "attn": attn[:, :, :y_max_length],
+                "mel": decoder_outputs,
+                "mel_lengths": y_lengths,
+                "rtf": rtf,
+            },
+            tp,
+            sigma_p,
+        )
 
     def forward(
         self,
@@ -186,20 +200,22 @@ class JyutVoiceTTS(BaseLightningClass):
             z, z_mask
         ) * cfg_mask + ~cfg_mask * self.fake_speaker.repeat(z.size(0), 1)
 
-        x, mu_x, x_mask = self.encoder(x, tone, lang, c, x_lengths)
+        x, align_x, x_mask = self.encoder(x, tone, lang, c, x_lengths)
         logw = self.dp(x, x_mask, c)
 
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
 
         # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
         with torch.no_grad():
-            s_p_sq_r = torch.ones_like(mu_x)  # [b, d, t]
+            s_p_sq_r = torch.ones_like(align_x)  # [b, d, t]
             neg_cent1 = torch.sum(
-                -0.5 * math.log(2 * math.pi) - torch.zeros_like(mu_x), [1], keepdim=True
+                -0.5 * math.log(2 * math.pi) - torch.zeros_like(align_x),
+                [1],
+                keepdim=True,
             )
             neg_cent2 = torch.einsum("bdt, bds -> bts", -0.5 * (y**2), s_p_sq_r)
-            neg_cent3 = torch.einsum("bdt, bds -> bts", y, (mu_x * s_p_sq_r))
-            neg_cent4 = torch.sum(-0.5 * (mu_x**2) * s_p_sq_r, [1], keepdim=True)
+            neg_cent3 = torch.einsum("bdt, bds -> bts", y, (align_x * s_p_sq_r))
+            neg_cent4 = torch.sum(-0.5 * (align_x**2) * s_p_sq_r, [1], keepdim=True)
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
 
             attn_mask = torch.unsqueeze(x_mask, 2) * torch.unsqueeze(y_mask, -1)
@@ -216,17 +232,27 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Align encoded text with mel-spectrogram and get mu_y segment
         attn = attn.squeeze(1).transpose(1, 2)
-        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
-        mu_y = mu_y.transpose(1, 2)
+        align_y = torch.matmul(attn.squeeze(1).transpose(1, 2), align_x.transpose(1, 2))
+        align_y = align_y.transpose(1, 2)
+
+        x = torch.matmul(attn.squeeze(1).transpose(1, 2), x.transpose(1, 2))
+        x = x.transpose(1, 2)
+        mu_y, sfm_params = self.encoder.forward_smooth(x, y_mask)
 
         # Compute loss of the decoder
-        cfg_mask = cfg_mask.unsqueeze(-1)
-        mu_y_masked = mu_y * cfg_mask + ~cfg_mask * self.fake_content.repeat(
-            mu_y.size(0), 1, mu_y.size(-1)
-        )  # mask content information for better diversity for flow-matching
-        diff_loss, _ = self.decoder.compute_loss(y, y_mask, mu_y_masked, c)
+        c = c * cfg_mask + ~cfg_mask * self.fake_speaker.repeat(c.size(0), 1)
+        loss_dict, value_dict = self.decoder.compute_loss(y, y_mask, sfm_params, c)
 
-        prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
+        prior_loss = torch.sum(
+            0.5 * ((y - align_y) ** 2 + math.log(2 * math.pi)) * y_mask
+        )
         prior_loss = prior_loss / (torch.sum(y_mask) * self.mel_channels)
 
-        return dur_loss, diff_loss, prior_loss, attn
+        coarse_loss = F.mse_loss(mu_y, y, reduction="none")
+        coarse_loss = torch.sum(coarse_loss) / (torch.sum(y_mask) * self.mel_channels)
+
+        loss_dict["duration_loss"] = dur_loss
+        loss_dict["prior_loss"] = prior_loss
+        loss_dict["coarse_loss"] = coarse_loss
+
+        return loss_dict, value_dict

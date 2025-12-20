@@ -8,9 +8,8 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data.dataloader import DataLoader
 from datasets import load_dataset, load_from_disk
-from jyutvoice.utils.model import fix_len_compatibility
 from jyutvoice.utils.utils import intersperse
-from jyutvoice.utils.audio import mel_spectrogram
+from jyutvoice.utils.audio import LogMelSpectrogram
 from jyutvoice.text import text_to_sequence
 
 
@@ -40,6 +39,10 @@ class TextMelDataModule(LightningDataModule):
         win_length,
         f_min,
         f_max,
+        center,
+        pad,
+        pad_mode,
+        mel_scale,
         seed,
         load_durations,
     ):
@@ -72,6 +75,10 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
+                self.hparams.center,
+                self.hparams.pad,
+                self.hparams.pad_mode,
+                self.hparams.mel_scale,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -87,6 +94,10 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
+                self.hparams.center,
+                self.hparams.pad,
+                self.hparams.pad_mode,
+                self.hparams.mel_scale,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -141,6 +152,10 @@ class TextMelDataset(torch.utils.data.Dataset):
         win_length=1024,
         f_min=0.0,
         f_max=8000,
+        center=False,
+        pad=0,
+        pad_mode="reflect",
+        mel_scale="slaney",
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
@@ -155,6 +170,19 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.f_max = f_max
         self.load_durations = load_durations
         self.tmp_dir = Path(tmp_dir)
+        self.mel_extractor = LogMelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+            f_min=f_min,
+            f_max=f_max,
+            pad=pad,
+            n_mels=n_mels,
+            center=center,
+            pad_mode=pad_mode,
+            mel_scale=mel_scale,
+        )
 
         # Create temporary directory if it does not exist
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -200,24 +228,11 @@ class TextMelDataset(torch.utils.data.Dataset):
         # Handle both list and numpy array formats from HuggingFace datasets
         if isinstance(audio, list):
             audio = np.array(audio, dtype=np.float32)
-        else:
-            audio = np.array(audio, dtype=np.float32)
+
         # Resample audio for mel-spectrogram generation (CosyVoice2 uses 24kHz)
         if sr != self.sample_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
         mel = self.get_mel(audio, self.sample_rate)
-
-        # Load pre-computed speaker embedding from dataset, or provide default
-        if "spk_emb" in row:
-            spk_emb = (
-                torch.tensor(row["spk_emb"], dtype=torch.float32)
-                if not isinstance(row["spk_emb"], torch.Tensor)
-                else row["spk_emb"].float()
-            )
-        else:
-            # Provide default speaker embedding for testing
-            spk_emb = torch.zeros(192, dtype=torch.float32)
-
         durations = self.get_durations(audio, text) if self.load_durations else None
 
         return {
@@ -228,7 +243,6 @@ class TextMelDataset(torch.utils.data.Dataset):
             "durations": durations,
             "lang": lang_ids,
             "tone": tone,
-            "spk_emb": spk_emb,
         }
 
     def get_durations(self, filepath, text):
@@ -253,17 +267,7 @@ class TextMelDataset(torch.utils.data.Dataset):
     def get_mel(self, audio, sr: int):
         audio = torch.from_numpy(audio).unsqueeze(0).float()  # [1, T]
         assert sr == self.sample_rate
-        mel = mel_spectrogram(
-            audio,
-            self.n_fft,
-            self.n_mels,
-            self.sample_rate,
-            self.hop_length,
-            self.win_length,
-            self.f_min,
-            self.f_max,
-            center=False,
-        ).squeeze()
+        mel = self.mel_extractor(audio).squeeze(0)
 
         return mel
 
