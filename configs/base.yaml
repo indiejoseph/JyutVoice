@@ -1,5 +1,6 @@
 # fixed params
 n_feats: 80
+n_heads: 4
 p_dropout: 0.1
 filter_channels_dp: 256
 token_frame_rate: 25
@@ -7,6 +8,9 @@ token_mel_ratio: 2
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
 num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+kernel_size: 3
+hidden_channels: 256
+filter_channels: 1024
 
 # audio processing params
 sample_rate: 24000
@@ -45,36 +49,24 @@ hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
 
 tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
   encoder: !new:jyutvoice.models.text_encoder.TextEncoder
-    encoder_type: RoPE Encoder
-    encoder_params: !new:omegaconf.DictConfig
-      content:
-        n_feats: !ref <n_feats>
-        n_channels: 192
-        filter_channels: 768
-        filter_channels_dp: !ref <filter_channels_dp>
-        n_heads: 2
-        n_layers: 6
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-        prenet: true
-
-    duration_predictor_params: !new:omegaconf.DictConfig
-      content:
-        filter_channels_dp: !ref <filter_channels_dp>
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-
     n_vocab: 97
-    n_lang: 3 # Cantonese, Mandarin, English
+    n_lang: 4 # Pad + Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
-    spk_embed_dim: !ref <n_feats>
-    lang_embed_dim: !ref <lang_embed_dim>
+    out_channels: !ref <n_feats>
+    hidden_channels: !ref <hidden_channels>
+    filter_channels: !ref <filter_channels>
+    n_heads: !ref <n_heads>
+    n_layers: 3
+    kernel_size: !ref <kernel_size>
+    p_dropout: !ref <p_dropout>
+    gin_channels: !ref <spk_embed_dim>
 
-  style_encoder: !new:jyutvoice.models.style_encoder.StyleEncoder
-    idim: !ref <n_feats>
-    gst_tokens: 10
-    gst_token_dim: 256
-    gst_heads: 4
+  dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
+    in_channels: !ref <hidden_channels>
+    filter_channels: !ref <filter_channels>
+    kernel_size: !ref <kernel_size>
+    p_dropout: 0.5
+    gin_channels: !ref <spk_embed_dim>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
