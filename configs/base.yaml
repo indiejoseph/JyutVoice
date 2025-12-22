@@ -114,7 +114,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
-  dataset_path: tmp/dataset_processed
+  dataset_path: tmp/dummy_dataset_resaved
   # speaker_embedding_model_path: pretrained_models/campplus.onnx
   # flow_encoder_path: pretrained_models/flow_encoder.pt
   # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
@@ -165,11 +165,11 @@ callbacks:
 
 # WandB Logging Configuration
 logger:
-  wandb:
-    _target_: lightning.pytorch.loggers.wandb.WandbLogger
-    name: jyutvoice-tts # Project name
-    project: jyutvoice-tts # WandB project name
-    entity: null # Set to your WandB team name if you have one
-    log_model: false # Set to true to log model checkpoints
-    prefix: ""
-    notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"
+  # wandb:
+  #   _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  #   name: jyutvoice-tts # Project name
+  #   project: jyutvoice-tts # WandB project name
+  #   entity: null # Set to your WandB team name if you have one
+  #   log_model: false # Set to true to log model checkpoints
+  #   prefix: ""
+  #   notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"
