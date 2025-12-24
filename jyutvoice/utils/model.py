@@ -46,11 +46,6 @@ def generate_path(duration, mask):
     return path
 
 
-def duration_loss(logw, logw_, lengths):
-    loss = torch.sum((logw - logw_) ** 2) / torch.sum(lengths)
-    return loss
-
-
 def normalize(data, mu, std):
     if not isinstance(mu, (float, int)):
         if isinstance(mu, list):

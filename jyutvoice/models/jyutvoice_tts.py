@@ -7,11 +7,11 @@ from torch.nn import functional as F
 from jyutvoice.utils.model import (
     sequence_mask,
     generate_path,
-    duration_loss,
 )
 from jyutvoice.utils.mask import make_pad_mask
 import jyutvoice.utils.monotonic_align as monotonic_align
 from jyutvoice.models.baselightningmodule import BaseLightningClass
+from jyutvoice.models.duration_predictor import duration_loss
 
 
 class JyutVoiceTTS(BaseLightningClass):
