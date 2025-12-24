@@ -332,25 +332,14 @@ class JyutVoiceTTS(BaseLightningClass):
         mu_y = mu_y.transpose(1, 2)
 
         # Compute loss of the decoder
-        if self.freeze_decoder:
-            # Cut graph to save memory/compute
-            diff_loss, _ = self.decoder.compute_loss(
-                x1=y.detach(),
-                mask=y_mask.detach(),
-                mu=mu_y.detach(),
-                spks=c.detach(),
-                cond=conds.detach(),
-                streaming=streaming,
-            )
-        else:
-            diff_loss, _ = self.decoder.compute_loss(
-                x1=y,
-                mask=y_mask,
-                mu=mu_y,
-                spks=c,
-                cond=conds,
-                streaming=streaming,
-            )
+        diff_loss, _ = self.decoder.compute_loss(
+            x1=y,
+            mask=y_mask,
+            mu=mu_y,
+            spks=c,
+            cond=conds,
+            streaming=streaming,
+        )
 
         # Compute the prior loss: MSE between aligned encoder representations
         # The prior loss trains the text encoder to match the frozen flow encoder representations
