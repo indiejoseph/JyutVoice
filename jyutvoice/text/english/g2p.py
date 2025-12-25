@@ -300,7 +300,7 @@ def g2p(text, phoneme=None, padding=True):
         syllable_pos = [0] + syllable_pos + [0]
         word2ph = [1] + word2ph + [1]
 
-    lang_ids = [2] * len(phones)  # 2 for English
+    lang_ids = [3] * len(phones)  # 3 for English
 
     return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
 

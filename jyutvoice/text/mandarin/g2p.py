@@ -141,7 +141,7 @@ def g2p(
         len(phones) == len(tones) == len(word_pos) == len(syllable_pos)
     ), "Phones, tones, word positions, and syllable positions must have the same length."
 
-    lang_ids = [1] * len(phones)  # 1 for Mandarin
+    lang_ids = [2] * len(phones)  # 2 for Mandarin
 
     return phones, tones, word2ph, word_pos, syllable_pos, lang_ids
 
