@@ -136,7 +136,7 @@ class JyutVoiceTTS(BaseLightningClass):
             syllable_pos (torch.Tensor): syllable position tokens.
                 shape: (batch_size, max_text_length)
             prompt_feat (torch.Tensor): prompt mel-spectrogram for conditioning.
-                shape: (batch_size, n_feats, max_prompt_length)
+                shape: (batch_size, max_prompt_length, n_feats)
             prompt_h (torch.Tensor): prompt hidden states for conditioning.
                 shape: (batch_size, max_prompt_length, n_feats)
             spk_embed (torch.Tensor): speaker embeddings.

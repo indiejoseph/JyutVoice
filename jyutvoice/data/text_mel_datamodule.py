@@ -150,7 +150,7 @@ class TextMelDataset(torch.utils.data.Dataset):
         hop_length=256,
         win_length=1024,
         f_min=0.0,
-        f_max=8000,
+        f_max: Optional[int] = None,
         token_mel_ratio=0,
         seed=None,
         load_durations=False,
