@@ -92,7 +92,7 @@ class BaseLightningClass(LightningModule, ABC):
         spk_embed = batch["spk_embed"]
         decoder_h = batch["decoder_h"]
 
-        dur_loss, prior_loss, diff_loss, kl_loss, *_ = self(
+        dur_loss, prior_loss, diff_loss, *_ = self(
             x=x,
             x_lengths=x_lengths,
             y=y,
@@ -109,7 +109,6 @@ class BaseLightningClass(LightningModule, ABC):
             "dur_loss": dur_loss,
             "prior_loss": prior_loss,
             "diff_loss": diff_loss,
-            "kl_loss": kl_loss,
         }
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -143,48 +142,22 @@ class BaseLightningClass(LightningModule, ABC):
             batch_size=batch["x"].shape[0],
         )
 
-        self.log(
-            "sub_loss/train_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/train_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/train_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/train_kl_loss",
-            loss_dict["kl_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
+        for k, v in loss_dict.items():
+            self.log(
+                f"sub_loss/train_{k}",
+                v,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
 
         # total_loss = sum(loss_dict.values())
         total_loss = (
             loss_dict["dur_loss"]
             + loss_dict["prior_loss"]
-            + (1e-6 * loss_dict["kl_loss"])
+            + (0.1 * loss_dict["diff_loss"])
         )
         self.log(
             "loss/train",
@@ -201,39 +174,22 @@ class BaseLightningClass(LightningModule, ABC):
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss_dict = self.get_losses(batch)
-        self.log(
-            "sub_loss/val_dur_loss",
-            loss_dict["dur_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/val_prior_loss",
-            loss_dict["prior_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
-        self.log(
-            "sub_loss/val_diff_loss",
-            loss_dict["diff_loss"],
-            on_step=True,
-            on_epoch=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=batch["x"].shape[0],
-        )
+        for k, v in loss_dict.items():
+            self.log(
+                f"sub_loss/val_{k}",
+                v,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+                batch_size=batch["x"].shape[0],
+            )
 
         # total_loss = sum(loss_dict.values())
         total_loss = (
             loss_dict["dur_loss"]
             + loss_dict["prior_loss"]
-            + (1e-6 * loss_dict["kl_loss"])
+            + (0.1 * loss_dict["diff_loss"])
         )
         self.log(
             "loss/val",
