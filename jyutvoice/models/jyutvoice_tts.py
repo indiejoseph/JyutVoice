@@ -172,25 +172,28 @@ class JyutVoiceTTS(BaseLightningClass):
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         x, mu_x, x_mask = self.encoder(
             x, tone, lang, spk_embed, x_lengths, word_pos, syllable_pos
-        )
-        logw = self.dp(x, x_mask, spk_embed)
+        )  # x = [B, n_feats, T_text], mu_x = [1, n_mel, T_text], x_mask = [1, 1, T_text]
+        logw = self.dp(x, x_mask, spk_embed)  # B, 1, T_text
 
-        w = torch.exp(logw) * x_mask
-        w_ceil = torch.ceil(w) * length_scale
-        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+        w = torch.exp(logw) * x_mask  # B, 1, T_text
+        w_ceil = torch.ceil(w) * length_scale  # B, 1, T_text
+        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()  # B,
         y_max_length = y_lengths.max()
 
         # Using obtained durations `w` construct alignment map `attn`
-        y_mask = sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask.dtype)
-        attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
-        attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
+        y_mask = (
+            sequence_mask(y_lengths, y_max_length).unsqueeze(1).to(x_mask.dtype)
+        )  # B, 1, T_mel
+        attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)  # B, 1, T_text, T_mel
+        attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(
+            1
+        )  # B, 1, T_text, T_mel
 
         # Align encoded text and get mu_y
         mu_y = torch.matmul(
             attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2)
-        ).transpose(
-            1, 2
-        )  # B, n_feats, T_mel
+        )  # B, T_mel, n_feats
+        mu_y = mu_y.transpose(1, 2)  # B, n_feats, T_mel
         encoder_outputs = mu_y[:, :, :y_max_length]
 
         # Enforce batch_size=1 for inference (decoder requirement)
@@ -255,7 +258,6 @@ class JyutVoiceTTS(BaseLightningClass):
         syllable_pos,
         spk_embed,
         decoder_h,
-        durations=None,
     ):
         """
         Computes 3 losses:
@@ -284,8 +286,8 @@ class JyutVoiceTTS(BaseLightningClass):
         # compute style conditioning
         x, mu_x, x_mask = self.encoder(
             x, tone, lang, spk_embed, x_lengths, word_pos, syllable_pos
-        )
-        logw = self.dp(x, x_mask, spk_embed)
+        )  # x = [B, n_feats, T_text], mu_x = [1, n_feats, T_text], x_mask = [1, 1, T_text]
+        logw = self.dp(x, x_mask, spk_embed)  # B, 1, T_text
 
         y_max_length = y.shape[-1]
 
@@ -294,12 +296,14 @@ class JyutVoiceTTS(BaseLightningClass):
 
         # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
         with torch.no_grad():
+            # decoder_h: [B, T_mel, n_feats] -> [B, n_feats, T_mel]
+            h = decoder_h.transpose(1, 2)
             s_p_sq_r = torch.ones_like(mu_x)  # [b, d, t]
             neg_cent1 = torch.sum(
                 -0.5 * math.log(2 * math.pi) - torch.zeros_like(mu_x), [1], keepdim=True
             )
-            neg_cent2 = torch.einsum("bdt, bds -> bts", -0.5 * (y**2), s_p_sq_r)
-            neg_cent3 = torch.einsum("bdt, bds -> bts", y, (mu_x * s_p_sq_r))
+            neg_cent2 = torch.einsum("bdt, bds -> bts", -0.5 * (h**2), s_p_sq_r)
+            neg_cent3 = torch.einsum("bdt, bds -> bts", h, (mu_x * s_p_sq_r))
             neg_cent4 = torch.sum(-0.5 * (mu_x**2) * s_p_sq_r, [1], keepdim=True)
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
 
@@ -315,9 +319,6 @@ class JyutVoiceTTS(BaseLightningClass):
         logw_ = torch.log(1e-8 + attn.sum(2)) * x_mask
         dur_loss = duration_loss(logw, logw_, x_lengths)
 
-        # NOTE unified training, static_chunk_size > 0 or = 0
-        streaming = True if random.random() < 0.5 else False
-
         # get conditions
         conds = torch.zeros(y.shape, device=y.device)
         for i, j in enumerate(y_lengths):
@@ -327,8 +328,9 @@ class JyutVoiceTTS(BaseLightningClass):
             conds[i, :, :index] = y[i, :, :index]
 
         # Align encoded text with mel-spectrogram and get mu_y segment
-        attn = attn.squeeze(1).transpose(1, 2)
-        mu_y = torch.matmul(attn.transpose(1, 2), mu_x.transpose(1, 2))
+        # attn: [b, t_text, t_mel] x mu_x: [b, n_feats, t_text]
+        attn = attn.squeeze(1).transpose(1, 2)  # [b, t_mel, t_text]
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
 
         # Compute loss of the decoder
@@ -338,7 +340,7 @@ class JyutVoiceTTS(BaseLightningClass):
             mu=mu_y,
             spks=c,
             cond=conds,
-            streaming=streaming,
+            streaming=False,
         )
 
         # Compute the prior loss: MSE between aligned encoder representations
@@ -347,13 +349,12 @@ class JyutVoiceTTS(BaseLightningClass):
         decoder_h_mask = (
             sequence_mask(y_lengths, decoder_max_length).unsqueeze(1).to(mu_y.dtype)
         )
-        mu_y_t = mu_y.transpose(1, 2)  # (B, T_mel, n_feats)
 
         # Compute prior loss comparing aligned representations
         prior_loss = torch.sum(
             0.5
-            * ((decoder_h - mu_y_t) ** 2 + math.log(2 * math.pi))
-            * decoder_h_mask.squeeze(1).unsqueeze(-1)
+            * ((decoder_h.transpose(1, 2) - mu_y) ** 2 + math.log(2 * math.pi))
+            * decoder_h_mask
         )
         prior_loss = prior_loss / (torch.sum(decoder_h_mask) * self.n_feats)
 

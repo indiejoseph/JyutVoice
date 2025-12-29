@@ -103,7 +103,6 @@ class BaseLightningClass(LightningModule, ABC):
             syllable_pos=syllable_pos,
             spk_embed=spk_embed,
             decoder_h=decoder_h,
-            durations=batch.get("durations", None),
         )
         return {
             "dur_loss": dur_loss,

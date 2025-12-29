@@ -104,7 +104,7 @@ class TextEncoder(nn.Module):
 
         for layer in self.encoder:
             x = layer(x, c, x_mask)
-        mu_x = self.proj(x) * x_mask
+        mu_x = self.proj(x) * x_mask  # (B, out_channels, T)
 
         return x, mu_x, x_mask
 
@@ -134,8 +134,8 @@ if __name__ == "__main__":
     word_pos = torch.randint(0, 4, (2, 10))
     c = torch.randn(2, 128)
 
-    mu, logw, x_mask = text_encoder(x, tone, lang, c, x_lengths, word_pos, syllable_pos)
+    x, mu_x, x_mask = text_encoder(x, tone, lang, c, x_lengths, word_pos, syllable_pos)
 
-    print(mu.shape)
-    print(logw.shape)
-    print(x_mask.shape)
+    print("mu", x.shape)
+    print("logw", mu_x.shape)
+    print("x_mask", x_mask.shape)

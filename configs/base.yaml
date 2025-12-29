@@ -56,16 +56,16 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     hidden_channels: !ref <hidden_channels>
     filter_channels: !ref <filter_channels>
     n_heads: !ref <n_heads>
-    n_layers: 3
+    n_layers: 6
     kernel_size: !ref <kernel_size>
     p_dropout: !ref <p_dropout>
     gin_channels: !ref <spk_embed_dim>
 
   dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
     in_channels: !ref <hidden_channels>
-    filter_channels: !ref <filter_channels>
-    kernel_size: !ref <kernel_size>
-    p_dropout: 0.5
+    filter_channels: !ref <filter_channels_dp>
+    kernel_size: 3
+    p_dropout: !ref <p_dropout>
     gin_channels: !ref <spk_embed_dim>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM

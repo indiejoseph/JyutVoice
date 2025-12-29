@@ -41,6 +41,6 @@ def maximum_path_jit(paths, values, t_ys, t_xs):
         for y in range(t_y - 1, -1, -1):
             path[y, index] = 1
             if index != 0 and (
-                index == y or (y > 0 and value[y - 1, index] < value[y - 1, index - 1])
+                index == y or value[y - 1, index] < value[y - 1, index - 1]
             ):
                 index = index - 1
