@@ -82,37 +82,6 @@ class ConvReluNorm(nn.Module):
         return x * x_mask
 
 
-class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout):
-        super().__init__()
-        self.in_channels = in_channels
-        self.filter_channels = filter_channels
-        self.p_dropout = p_dropout
-
-        self.drop = torch.nn.Dropout(p_dropout)
-        self.conv_1 = torch.nn.Conv1d(
-            in_channels, filter_channels, kernel_size, padding=kernel_size // 2
-        )
-        self.norm_1 = LayerNorm(filter_channels)
-        self.conv_2 = torch.nn.Conv1d(
-            filter_channels, filter_channels, kernel_size, padding=kernel_size // 2
-        )
-        self.norm_2 = LayerNorm(filter_channels)
-        self.proj = torch.nn.Conv1d(filter_channels, 1, 1)
-
-    def forward(self, x, x_mask):
-        x = self.conv_1(x * x_mask)
-        x = torch.relu(x)
-        x = self.norm_1(x)
-        x = self.drop(x)
-        x = self.conv_2(x * x_mask)
-        x = torch.relu(x)
-        x = self.norm_2(x)
-        x = self.drop(x)
-        x = self.proj(x * x_mask)
-        return x * x_mask
-
-
 class RotaryPositionalEmbeddings(nn.Module):
     """
     ## RoPE module
@@ -373,12 +342,9 @@ class TextEncoder(nn.Module):
         self,
         encoder_type,
         encoder_params,
-        duration_predictor_params,
         n_vocab,
         n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
         n_tone=7,  # PAD + 6 tones
-        spk_embed_dim=192,
-        lang_embed_dim=32,
     ):
         super().__init__()
         self.encoder_type = encoder_type
@@ -390,16 +356,15 @@ class TextEncoder(nn.Module):
         self.n_layers = encoder_params.n_layers
         self.kernel_size = encoder_params.kernel_size
         self.p_dropout = encoder_params.p_dropout
-        self.spk_embed_dim = spk_embed_dim
-        self.lang_embed_dim = lang_embed_dim
+        self.gin_channels = encoder_params.gin_channels
 
         # token-level embeddings
         self.emb = nn.Embedding(n_vocab, self.n_channels)
         nn.init.normal_(self.emb.weight, 0.0, self.n_channels**-0.5)
 
         # language embedding (we'll pool to global later)
-        self.lang_emb = nn.Embedding(n_lang, self.lang_embed_dim)
-        nn.init.normal_(self.lang_emb.weight, 0.0, self.lang_embed_dim**-0.5)
+        self.lang_emb = nn.Embedding(n_lang, self.n_channels)
+        nn.init.normal_(self.lang_emb.weight, 0.0, self.n_channels**-0.5)
 
         self.tone_emb = nn.Embedding(n_tone, self.n_channels)
         nn.init.normal_(self.tone_emb.weight, 0.0, self.n_channels**-0.5)
@@ -423,30 +388,30 @@ class TextEncoder(nn.Module):
             self.prenet = lambda x, x_mask: x
 
         # total channels into encoder: phoneme + speaker + language
-        in_channels = self.n_channels + self.spk_embed_dim + self.lang_embed_dim
+        self.hidden_channels = self.n_channels * 2 + self.gin_channels
 
         self.encoder = Encoder(
-            in_channels,
+            self.hidden_channels,
             self.filter_channels,
             self.n_heads,
             self.n_layers,
             self.kernel_size,
             self.p_dropout,
         )
-        self.proj_m = nn.Conv1d(in_channels, self.n_feats, 1)
-        self.proj_w = DurationPredictor(
-            in_channels,
-            duration_predictor_params.filter_channels_dp,
-            duration_predictor_params.kernel_size,
-            duration_predictor_params.p_dropout,
-        )
+        self.proj = nn.Conv1d(self.hidden_channels, self.n_feats, 1)
 
     def output_size(self):
-        return self.n_feats
+        return self.hidden_channels
 
     def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed):
         """
+        x: (B, T) input token IDs
+        x_lengths: (B,) input lengths
         lang: (B, T) language IDs per token
+        tone: (B, T) tone IDs per token
+        word_pos: (B, T) word position IDs per token
+        syllable_pos: (B, T) syllable position IDs per token
+        spk_embed: (B, C_spk) global speaker embedding
         """
 
         # --- token-level phoneme features (NO lang added here) ---
@@ -471,7 +436,7 @@ class TextEncoder(nn.Module):
 
         # --- global speaker style, tiled over time ---
         spk_global = spk_embed.unsqueeze(-1).expand(
-            B, self.spk_embed_dim, T
+            B, self.gin_channels, T
         )  # (B, C_spk, T)
 
         lang_embed = self.lang_emb(lang).transpose(1, 2)  # (B, D_lang, T)
@@ -481,13 +446,9 @@ class TextEncoder(nn.Module):
 
         # encoder
         x = self.encoder(x, x_mask)
-        mu = self.proj_m(x) * x_mask
+        mu = self.proj(x) * x_mask  # (B, n_feats, T)
 
-        # duration predictor (grad-detached if you want)
-        x_dp = x.detach()
-        logw = self.proj_w(x_dp, x_mask)
-
-        return mu, logw, x_mask
+        return x, mu, x_mask
 
 
 if __name__ == "__main__":
@@ -506,13 +467,7 @@ if __name__ == "__main__":
                 "kernel_size": 3,
                 "p_dropout": 0.1,
                 "prenet": True,
-            }
-        ),
-        duration_predictor_params=DictConfig(
-            {
-                "filter_channels_dp": 256,
-                "kernel_size": 3,
-                "p_dropout": 0.1,
+                "gin_channels": 192,
             }
         ),
         n_vocab=38,  # 49
@@ -528,10 +483,10 @@ if __name__ == "__main__":
     lang = torch.randint(0, 3, (2, 10))
     spk_embed = torch.randn(2, 192)
 
-    mu, logw, x_mask = text_encoder(
+    x, mu, x_mask = text_encoder(
         x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
     )
 
+    print(x.shape)
     print(mu.shape)
-    print(logw.shape)
     print(x_mask.shape)

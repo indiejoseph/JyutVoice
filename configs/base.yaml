@@ -1,5 +1,6 @@
 # fixed params
 n_feats: 80
+n_heads: 4
 p_dropout: 0.1
 filter_channels_dp: 256
 token_frame_rate: 25
@@ -7,6 +8,9 @@ token_mel_ratio: 2
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
 num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+kernel_size: 3
+hidden_channels: 256
+filter_channels: 1024
 
 # audio processing params
 sample_rate: 24000
@@ -14,7 +18,7 @@ hop_length: 480
 win_length: 1920
 n_fft: 1920
 f_min: 0
-f_max: 8000
+f_max: null
 add_blank: true
 spk_embed_dim: 192
 lang_embed_dim: 32
@@ -56,19 +60,18 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
         n_layers: 6
         kernel_size: 3
         p_dropout: !ref <p_dropout>
+        gin_channels: !ref <spk_embed_dim>
         prenet: true
-
-    duration_predictor_params: !new:omegaconf.DictConfig
-      content:
-        filter_channels_dp: !ref <filter_channels_dp>
-        kernel_size: 3
-        p_dropout: !ref <p_dropout>
-
     n_vocab: 97
-    n_lang: 3 # Cantonese, Mandarin, English
+    n_lang: 4 # Pad + Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
-    spk_embed_dim: !ref <n_feats>
-    lang_embed_dim: !ref <lang_embed_dim>
+
+  dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
+    in_channels: 576 # n_channels * 2 + gin_channels
+    filter_channels: !ref <filter_channels_dp>
+    kernel_size: 3
+    p_dropout: !ref <p_dropout>
+    gin_channels: !ref <spk_embed_dim>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240
