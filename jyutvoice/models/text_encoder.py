@@ -466,7 +466,6 @@ class TextEncoder(nn.Module):
 
         # prenet on phoneme channels
         x = self.prenet(x, x_mask)  # (B, C, T)
-        B, _, T = x.size()
 
         # encoder
         x = self.encoder(x, x_mask, g=g)
