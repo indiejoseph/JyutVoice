@@ -299,6 +299,18 @@ class Encoder(nn.Module):
         self.n_layers = n_layers
         self.kernel_size = kernel_size
         self.p_dropout = p_dropout
+        self.cond_layer_idx = self.n_layers
+        if "gin_channels" in kwargs:
+            self.gin_channels = kwargs["gin_channels"]
+            if self.gin_channels != 0:
+                self.spk_emb_linear = nn.Linear(self.gin_channels, self.hidden_channels)
+                # vits2 says 3rd block, so idx is 2 by default
+                self.cond_layer_idx = (
+                    kwargs["cond_layer_idx"] if "cond_layer_idx" in kwargs else 2
+                )
+                assert (
+                    self.cond_layer_idx < self.n_layers
+                ), "cond_layer_idx should be less than n_layers"
 
         self.drop = torch.nn.Dropout(p_dropout)
         self.attn_layers = torch.nn.ModuleList()
@@ -323,10 +335,19 @@ class Encoder(nn.Module):
             )
             self.norm_layers_2.append(LayerNorm(hidden_channels))
 
-    def forward(self, x, x_mask):
+    def forward(self, x, x_mask, g=None):
         attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
+        x = x * x_mask
+
+        if g is not None and self.gin_channels != 0:
+            B, _, T = x.size()
+            g = self.spk_emb_linear(g)
+            g = g.unsqueeze(-1).expand(B, self.gin_channels, T)
+
         for i in range(self.n_layers):
-            x = x * x_mask
+            if i == self.cond_layer_idx and g is not None:
+                x = x + g
+                x = x * x_mask
             y = self.attn_layers[i](x, x, attn_mask)
             y = self.drop(y)
             x = self.norm_layers_1[i](x + y)
@@ -387,23 +408,21 @@ class TextEncoder(nn.Module):
         else:
             self.prenet = lambda x, x_mask: x
 
-        # total channels into encoder: phoneme + speaker + language
-        self.hidden_channels = self.n_channels * 2 + self.gin_channels
-
         self.encoder = Encoder(
-            self.hidden_channels,
+            self.n_channels,
             self.filter_channels,
             self.n_heads,
             self.n_layers,
             self.kernel_size,
             self.p_dropout,
+            gin_channels=self.gin_channels,
         )
-        self.proj = nn.Conv1d(self.hidden_channels, self.n_feats, 1)
+        self.proj = nn.Conv1d(self.n_channels, self.n_feats, 1)
 
     def output_size(self):
-        return self.hidden_channels
+        return self.n_channels
 
-    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed):
+    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, g):
         """
         x: (B, T) input token IDs
         x_lengths: (B,) input lengths
@@ -411,13 +430,14 @@ class TextEncoder(nn.Module):
         tone: (B, T) tone IDs per token
         word_pos: (B, T) word position IDs per token
         syllable_pos: (B, T) syllable position IDs per token
-        spk_embed: (B, C_spk) global speaker embedding
+        g: (B, C_spk) global speaker embedding
         """
 
         # --- token-level phoneme features (NO lang added here) ---
         x = (
             self.emb(x)
             + self.tone_emb(tone)
+            + self.lang_emb(lang)
             + self.word_pos_emb(word_pos)
             + self.syllable_pos(syllable_pos)
         ) * math.sqrt(
@@ -434,18 +454,8 @@ class TextEncoder(nn.Module):
         x = self.prenet(x, x_mask)  # (B, C, T)
         B, _, T = x.size()
 
-        # --- global speaker style, tiled over time ---
-        spk_global = spk_embed.unsqueeze(-1).expand(
-            B, self.gin_channels, T
-        )  # (B, C_spk, T)
-
-        lang_embed = self.lang_emb(lang).transpose(1, 2)  # (B, D_lang, T)
-
-        # concat [phoneme, spk, lang]
-        x = torch.cat([x, spk_global, lang_embed], dim=1)  # (B, C + C_spk + D_lang, T)
-
         # encoder
-        x = self.encoder(x, x_mask)
+        x = self.encoder(x * x_mask, x_mask, g=g)
         mu = self.proj(x) * x_mask  # (B, n_feats, T)
 
         return x, mu, x_mask

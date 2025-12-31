@@ -376,9 +376,8 @@ class TextMelBatchCollate:
     def __call__(self, batch):
         B = len(batch)
         y_max_length = max(
-            [item["y"].shape[-1] for item in batch]
+            [item["decoder_h"].shape[0] for item in batch]
         )  # pylint: disable=consider-using-generator
-        y_max_length = fix_len_compatibility(y_max_length)
         x_max_length = max(
             [item["x"].shape[-1] for item in batch]
         )  # pylint: disable=consider-using-generator
@@ -422,21 +421,7 @@ class TextMelBatchCollate:
             word_pos[i, : word_pos_.shape[-1]] = word_pos_
             syllable_pos[i, : syllable_pos_.shape[-1]] = syllable_pos_
             spk_embed[i] = torch.tensor(spk_embed_).float()
-            # Handle decoder_h with potentially different dimensions
-            decoder_h_padded = torch.zeros(
-                y_max_length, decoder_h_dim, dtype=torch.float32
-            )
-            decoder_h_actual = torch.tensor(decoder_h_).float()
-            actual_length = min(decoder_h_actual.shape[0], y_max_length)
-            if len(decoder_h_actual.shape) == 2:  # (time, hidden_dim)
-                decoder_h_padded[:actual_length, : decoder_h_actual.shape[1]] = (
-                    decoder_h_actual[:actual_length]
-                )
-            else:  # Handle unexpected shapes
-                decoder_h_padded[
-                    :actual_length, : min(decoder_h_dim, decoder_h_actual.shape[-1])
-                ] = decoder_h_actual[:actual_length]
-            decoder_h[i] = decoder_h_padded
+            decoder_h[i, : decoder_h_.shape[0], : decoder_h_.shape[1]] = decoder_h_
             if item["durations"] is not None:
                 durations[i, : item["durations"].shape[-1]] = item["durations"]
 

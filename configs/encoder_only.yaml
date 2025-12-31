@@ -73,31 +73,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     p_dropout: !ref <p_dropout>
     gin_channels: !ref <spk_embed_dim>
 
-  decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
-    in_channels: 240
-    n_spks: 1
-    spk_emb_dim: 80
-    cfm_params: !new:omegaconf.DictConfig
-      content:
-        sigma_min: 1e-06
-        solver: "euler"
-        t_scheduler: "cosine"
-        training_cfg_rate: 0.2
-        inference_cfg_rate: 0.7
-        reg_loss_type: "l1"
-    estimator: !new:jyutvoice.flow.decoder.CausalConditionalDecoder
-      in_channels: 320
-      out_channels: 80
-      channels: [256]
-      dropout: 0.0
-      attention_head_dim: 64
-      n_blocks: 4
-      num_mid_blocks: 12
-      num_heads: 8
-      act_fn: "gelu"
-      static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
-      num_decoding_left_chunks: !ref <num_decoding_left_chunks>
-
+  decoder: null
   spk_embed_dim: !ref <spk_embed_dim>
   optimizer: !name:torch.optim.AdamW
     lr: 1e-4

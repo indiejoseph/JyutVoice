@@ -100,21 +100,18 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
 
   spk_embed_dim: !ref <spk_embed_dim>
   optimizer: !name:torch.optim.AdamW
-    lr: 1e-4
+    lr: 5e-4
     weight_decay: 0.0
   scheduler: null
-  warmup_steps: 100 # Number of warmup steps for learning rate
+  warmup_steps: 0 # Number of warmup steps for learning rate
 
 data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   name: jyutvoice_tts
   dataset_path: tmp/dataset_small
-  # speaker_embedding_model_path: pretrained_models/campplus.onnx
-  # flow_encoder_path: pretrained_models/flow_encoder.pt
-  # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
   batch_size: 8
   num_workers: 2
   pin_memory: true
-  dataset_valid_ratio: 0.001
+  dataset_valid_ratio: 0.00001
   seed: 42
   load_durations: false
   add_blank: !ref <add_blank>
