@@ -71,7 +71,6 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     filter_channels: !ref <filter_channels_dp>
     kernel_size: 3
     p_dropout: !ref <p_dropout>
-    gin_channels: !ref <spk_embed_dim>
 
   decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
     in_channels: 240

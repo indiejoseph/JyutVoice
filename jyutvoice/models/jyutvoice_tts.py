@@ -113,14 +113,14 @@ class JyutVoiceTTS(BaseLightningClass):
         t = dt.datetime.now()
 
         # Project speaker embedding for FM conditioning
-        c = F.normalize(spk_embed, dim=1)
-        c = self.spk_embed_affine_layer(c)
+        spk_embed = F.normalize(spk_embed, dim=1)
+        c = self.spk_embed_affine_layer(spk_embed)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         x, mu_x, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )  # x = [B, n_feats, T_text], mu_x = [1, n_mel, T_text], x_mask = [1, 1, T_text]
-        logw = self.dp(x, x_mask, spk_embed)  # B, 1, T_text
+        logw = self.dp(x, x_mask)  # B, 1, T_text
 
         w = torch.exp(logw) * x_mask  # B, 1, T_text
         w_ceil = torch.ceil(w) * length_scale  # B, 1, T_text
@@ -228,15 +228,14 @@ class JyutVoiceTTS(BaseLightningClass):
             durations: Optional ground truth durations for teacher forcing
         """
         # xvec projection
-        c = F.normalize(spk_embed, dim=1)
-        c = self.spk_embed_affine_layer(c)
+        spk_embed = F.normalize(spk_embed, dim=1)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
         # compute style conditioning
         x, mu_x, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )  # x = [B, n_feats, T_text], mu_x = [1, n_feats, T_text], x_mask = [1, 1, T_text]
-        logw = self.dp(x, x_mask, spk_embed)  # B, 1, T_text
+        logw = self.dp(x, x_mask)  # B, 1, T_text
 
         y_max_length = decoder_h.shape[1]
 
@@ -249,7 +248,7 @@ class JyutVoiceTTS(BaseLightningClass):
             const = -0.5 * math.log(2 * math.pi) * self.n_feats
             factor = -0.5 * torch.ones(mu_x.shape, dtype=mu_x.dtype, device=mu_x.device)
             # Use decoder_h (flow encoder hidden states) for alignment computation
-            # decoder_h: (batch, T_text, n_feats) → transpose to (batch, n_feats, T_text)
+            # decoder_h: (batch, T_mel, n_feats) → transpose to (batch, n_feats, T_mel)
             h = decoder_h.transpose(1, 2)
             h_square = torch.matmul(factor.transpose(1, 2), (h**2))
             h_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), h)

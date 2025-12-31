@@ -24,9 +24,7 @@ class LayerNorm(nn.Module):
 
 
 class DurationPredictor(nn.Module):
-    def __init__(
-        self, in_channels, filter_channels, kernel_size, p_dropout, gin_channels
-    ):
+    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout):
         super().__init__()
         self.in_channels = in_channels
         self.filter_channels = filter_channels
@@ -43,11 +41,8 @@ class DurationPredictor(nn.Module):
         self.norm_2 = LayerNorm(filter_channels)
         self.proj = torch.nn.Conv1d(filter_channels, 1, 1)
 
-        self.cond = nn.Conv1d(gin_channels, in_channels, 1)
-
-    def forward(self, x, x_mask, g):
+    def forward(self, x, x_mask):
         x = x.detach()
-        x = x + self.cond(g.unsqueeze(2).detach())
         x = self.conv_1(x * x_mask)
         x = torch.relu(x)
         x = self.norm_1(x)
