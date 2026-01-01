@@ -12,7 +12,6 @@ from torch.utils.data.dataloader import DataLoader
 import onnxruntime
 from datasets import load_dataset, load_from_disk
 from jyutvoice.utils.audio import mel_spectrogram
-from jyutvoice.utils.model import fix_len_compatibility
 from jyutvoice.utils.utils import intersperse
 from jyutvoice.text import text_to_sequence
 
