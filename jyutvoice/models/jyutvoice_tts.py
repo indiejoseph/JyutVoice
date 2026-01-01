@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from jyutvoice.models.text_encoder import TextEncoder
     from jyutvoice.flow.flow_matching import CausalConditionalCFM
     from jyutvoice.models.duration_predictor import DurationPredictor
+    from jyutvoice.models.slp import SpeechLengthPredictor
 
 
 class JyutVoiceTTS(BaseLightningClass):
@@ -32,6 +33,7 @@ class JyutVoiceTTS(BaseLightningClass):
         optimizer=None,
         scheduler=None,
         warmup_steps=100,
+        n_frame_per_class=10,
     ):
         super().__init__()
 
@@ -45,6 +47,7 @@ class JyutVoiceTTS(BaseLightningClass):
         self.freeze_decoder = freeze_decoder
         self.freeze_encoder = freeze_encoder
         self.dp = dp
+        self.n_frame_per_class = n_frame_per_class
 
     @torch.inference_mode()
     def synthesise(
@@ -120,9 +123,32 @@ class JyutVoiceTTS(BaseLightningClass):
         x, mu_x, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
         )  # x = [B, n_feats, T_text], mu_x = [1, n_mel, T_text], x_mask = [1, 1, T_text]
-        logw = self.dp(x, x_mask)  # B, 1, T_text
 
-        w = torch.exp(logw) * x_mask  # B, 1, T_text
+        from jyutvoice.models.slp import SpeechLengthPredictor
+
+        # Handle duration prediction
+        if isinstance(self.dp, SpeechLengthPredictor):
+            # If DP is an SLP, it predicts total length
+            slp_out = self.dp(x, x_mask)
+            if slp_out.dim() > 1 and slp_out.shape[-1] > 1:  # CE logits
+                total_length = (
+                    torch.argmax(slp_out, dim=-1).float() * self.n_frame_per_class
+                )
+            else:  # L1 scalar
+                total_length = slp_out.float()
+
+            # Ensure total_length is (B, 1)
+            if total_length.dim() == 1:
+                total_length = total_length.unsqueeze(-1)
+
+            # Uniform distribution across phonemes scaled to SLP prediction
+            avg_dur = total_length / (x_lengths.float().unsqueeze(-1) + 1e-6)
+            w = avg_dur.unsqueeze(-1).expand(-1, 1, x.size(2)) * x_mask
+        else:
+            # Standard DurationPredictor
+            logw = self.dp(x, x_mask)  # B, 1, T_text
+            w = torch.exp(logw) * x_mask  # B, 1, T_text
+
         w_ceil = torch.ceil(w) * length_scale  # B, 1, T_text
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()  # B,
         y_max_length = y_lengths.max()

@@ -3,13 +3,14 @@ import argparse
 import torch
 import torch.nn.functional as F
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from hyperpyyaml import load_hyperpyyaml
 
 from jyutvoice.models.slp import SpeechLengthPredictor, calculate_remaining_lengths
 from jyutvoice.data.text_mel_datamodule import TextMelDataModule
+from jyutvoice.utils import instantiators
 
 
 def masked_l1_loss(est_lengths, tar_lengths, mask):
@@ -237,7 +238,7 @@ def main():
     tts = cfg["tts"]
     if os.path.exists(args.ckpt):
         print(f"Loading TTS weights from {args.ckpt}")
-        checkpoint = torch.load(args.ckpt, map_location="cpu")
+        checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
         state_dict = (
             checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
         )
@@ -286,7 +287,7 @@ def main():
     model = SLPLightningModule(tts, slp, slp_config)
 
     # Logger and Callbacks
-    logger = cfg["logger"]
+    logger = instantiators.instantiate_loggers(cfg.get("logger"))
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/slp",
         filename="slp-{epoch:02d}-{val_loss:.2f}",
@@ -294,6 +295,10 @@ def main():
         monitor="val/loss",
         mode="min",
     )
+    callbacks = [checkpoint_callback]
+    if logger:
+        lr_monitor = LearningRateMonitor(logging_interval="step")
+        callbacks.append(lr_monitor)
 
     # Trainer
     trainer = L.Trainer(
@@ -301,7 +306,7 @@ def main():
         accelerator="auto",
         devices=1,
         logger=logger,
-        callbacks=[checkpoint_callback],
+        callbacks=callbacks,
         gradient_clip_val=1.0,
         precision="16-mixed" if torch.cuda.is_available() else 32,
     )
