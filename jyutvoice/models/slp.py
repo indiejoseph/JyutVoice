@@ -31,14 +31,30 @@ class SpeechLengthPredictor(nn.Module):
         self,
         n_mel=80,
         hidden_dim=192,  # Should match TextEncoder.hidden_channels
+        n_text_layer=4,  # New: layers to re-interpret text features
         n_cross_layer=4,
         n_head=4,
         output_dim=1,
     ):
         super().__init__()
 
+        # Text Feature Re-interpreter (Memory Processing)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=n_head,
+            dim_feedforward=hidden_dim * 4,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.text_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=n_text_layer
+        )
+        self.text_pe = PositionalEncoding(hidden_dim)
+        self.text_norm = nn.LayerNorm(hidden_dim)
+
         # Mel Spectrogram Embedder (used during training)
         self.mel_embedder = nn.Linear(n_mel, hidden_dim)
+        self.mel_norm = nn.LayerNorm(hidden_dim)
         self.mel_pe = PositionalEncoding(hidden_dim)
 
         # Transformer Decoder Layers with Cross-Attention
@@ -70,14 +86,20 @@ class SpeechLengthPredictor(nn.Module):
         # memory_mask: True for padding positions
         memory_key_padding_mask = text_mask.squeeze(1) == 0
 
+        # Add positional encoding and re-interpret text features for duration task
+        memory = self.text_pe(memory)
+        memory = self.text_encoder(memory, src_key_padding_mask=memory_key_padding_mask)
+        memory = self.text_norm(memory)
+
         if mel is not None:
             # Training mode: Predict remaining length at each mel frame
             # mel: (B, n_mel, T_mel) -> (B, T_mel, n_mel)
-            mel_features = self.mel_pe(self.mel_embedder(mel.transpose(1, 2)))
+            mel_features = self.mel_norm(self.mel_embedder(mel.transpose(1, 2)))
 
             # Prepend length_query to mel_features to train it for total length prediction
-            query = self.length_query.expand(B, -1, -1)
+            query = self.mel_norm(self.length_query.expand(B, -1, -1))
             tgt = torch.cat([query, mel_features], dim=1)
+            tgt = self.mel_pe(tgt)
 
             seq_len = tgt.size(1)
             # Causal mask for mel sequence
@@ -93,9 +115,10 @@ class SpeechLengthPredictor(nn.Module):
             )
         else:
             # Inference mode: Predict total length using a query
-            query = self.length_query.expand(B, -1, -1)
+            query = self.mel_norm(self.length_query.expand(B, -1, -1))
+            tgt = self.mel_pe(query)
             decoder_out = self.decoder(
-                tgt=query,
+                tgt=tgt,
                 memory=memory,
                 memory_key_padding_mask=memory_key_padding_mask,
             )
