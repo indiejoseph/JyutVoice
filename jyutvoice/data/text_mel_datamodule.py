@@ -44,7 +44,6 @@ class TextMelDataModule(LightningDataModule):
         win_length,
         f_min,
         f_max,
-        token_mel_ratio,
         seed,
         load_durations,
     ):
@@ -78,7 +77,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
-                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -95,7 +93,6 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.win_length,
                 self.hparams.f_min,
                 self.hparams.f_max,
-                self.hparams.token_mel_ratio,
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
@@ -151,7 +148,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         win_length=1024,
         f_min=0.0,
         f_max=8000,
-        token_mel_ratio=0,
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
@@ -165,7 +161,6 @@ class TextMelDataset(torch.utils.data.Dataset):
         self.win_length = win_length
         self.f_min = f_min
         self.f_max = f_max
-        self.token_mel_ratio = token_mel_ratio
         self.load_durations = load_durations
         self.tmp_dir = Path(tmp_dir)
 
