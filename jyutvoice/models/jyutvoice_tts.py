@@ -120,9 +120,9 @@ class JyutVoiceTTS(BaseLightningClass):
         c = self.spk_embed_affine_layer(spk_embed)
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        x, mu_x, x_mask = self.encoder(
+        x_enc, mu_x, x_mask = self.encoder(
             x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
-        )  # x = [B, n_feats, T_text], mu_x = [1, n_mel, T_text], x_mask = [1, 1, T_text]
+        )  # x_enc = [B, n_feats, T_text], mu_x = [1, n_mel, T_text], x_mask = [1, 1, T_text]
 
         from jyutvoice.models.slp import SpeechLengthPredictor
 
@@ -151,10 +151,10 @@ class JyutVoiceTTS(BaseLightningClass):
 
             # Uniform distribution across phonemes scaled to SLP prediction
             avg_dur = total_length / (x_lengths.float().unsqueeze(-1) + 1e-6)
-            w = avg_dur.unsqueeze(-1).expand(-1, 1, x.size(2)) * x_mask
+            w = avg_dur.unsqueeze(-1).expand(-1, 1, x_mask.size(2)) * x_mask
         else:
             # Standard DurationPredictor
-            logw = self.dp(x, x_mask)  # B, 1, T_text
+            logw = self.dp(x_enc, x_mask)  # B, 1, T_text
             w = torch.exp(logw) * x_mask  # B, 1, T_text
 
         w_ceil = torch.ceil(w) * length_scale  # B, 1, T_text

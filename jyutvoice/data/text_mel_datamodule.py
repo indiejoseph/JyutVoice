@@ -249,24 +249,6 @@ class TextMelDataset(torch.utils.data.Dataset):
             mel_time_steps = mel.shape[1]
             decoder_h = torch.zeros(mel_time_steps, self.n_mels, dtype=torch.float32)
 
-        if self.token_mel_ratio != 0:
-            decoder_h_len = decoder_h.shape[0]
-            token_len = int(min(mel.shape[1] / self.token_mel_ratio, decoder_h_len))
-            mel_len = self.token_mel_ratio * token_len
-            mel = mel[:, :mel_len]
-
-            if mel_len != decoder_h_len:
-                decoder_h = decoder_h[:mel_len, :]
-
-        if self.token_mel_ratio != 0:
-            decoder_h_len = decoder_h.shape[0]
-            token_len = int(min(mel.shape[1] / self.token_mel_ratio, decoder_h_len))
-            mel_len = self.token_mel_ratio * token_len
-            mel = mel[:, :mel_len]
-
-            if mel_len != decoder_h_len:
-                decoder_h = decoder_h[:mel_len, :]
-
         return {
             "x": phone_ids,
             "y": mel,

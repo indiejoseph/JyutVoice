@@ -67,6 +67,9 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_tone: 7 # pad + 6 tones
 
   dp: !new:jyutvoice.models.slp.SpeechLengthPredictor
+    n_vocab: 97
+    n_lang: 4
+    n_tone: 7
     n_mel: 80
     hidden_dim: 192
     n_cross_layer: 4
@@ -125,7 +128,6 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
-  token_mel_ratio: !ref <token_mel_ratio>
 
 trainer: !new:lightning.Trainer
   accelerator: auto
