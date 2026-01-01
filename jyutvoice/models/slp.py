@@ -24,19 +24,31 @@ class PositionalEncoding(nn.Module):
 class SpeechLengthPredictor(nn.Module):
     """
     Transformer Encoder-Decoder architecture for speech length prediction.
-    Reuses TextEncoder outputs as memory for cross-attention.
+    Uses linguistic embeddings (phoneme, tone, lang, etc.) as input.
     """
 
     def __init__(
         self,
+        n_vocab=100,
+        n_lang=4,
+        n_tone=7,
         n_mel=80,
         hidden_dim=192,  # Should match TextEncoder.hidden_channels
-        n_text_layer=4,  # New: layers to re-interpret text features
+        n_text_layer=4,  # layers to re-interpret text features
         n_cross_layer=4,
         n_head=4,
         output_dim=1,
+        spk_embed_dim=192,
     ):
         super().__init__()
+
+        # Linguistic Embeddings
+        self.emb = nn.Embedding(n_vocab, hidden_dim)
+        self.lang_emb = nn.Embedding(n_lang, hidden_dim)
+        self.tone_emb = nn.Embedding(n_tone, hidden_dim)
+        self.word_pos_emb = nn.Embedding(4, hidden_dim)
+        self.syllable_pos_emb = nn.Embedding(4, hidden_dim)
+        self.spk_proj = nn.Linear(spk_embed_dim, hidden_dim)
 
         # Text Feature Re-interpreter (Memory Processing)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -73,18 +85,45 @@ class SpeechLengthPredictor(nn.Module):
         # Query for inference (to predict total length)
         self.length_query = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
-    def forward(self, text_features, text_mask, mel=None):
+    def forward(
+        self,
+        x,
+        x_mask,
+        lang,
+        tone,
+        word_pos,
+        syllable_pos,
+        spk_embed,
+        mel=None,
+    ):
         """
         Args:
-            text_features: (B, C, T_text) from TextEncoder
-            text_mask: (B, 1, T_text)
+            x: (B, T_text) phoneme IDs
+            x_mask: (B, 1, T_text)
+            lang: (B, T_text) language IDs
+            tone: (B, T_text) tone IDs
+            word_pos: (B, T_text) word position IDs
+            syllable_pos: (B, T_text) syllable position IDs
+            spk_embed: (B, spk_embed_dim) speaker embeddings
             mel: (B, n_mel, T_mel) target mel (optional, for training)
         """
-        B = text_features.size(0)
-        # Memory for transformer (B, T_text, C)
-        memory = text_features.transpose(1, 2)
+        B = x.size(0)
+
+        # Embed linguistic features
+        memory = self.emb(x)
+        memory = memory + self.lang_emb(lang)
+        memory = memory + self.tone_emb(tone)
+        memory = memory + self.word_pos_emb(word_pos)
+        memory = memory + self.syllable_pos_emb(syllable_pos)
+
+        # Add speaker embedding as global condition
+        if spk_embed is not None:
+            g = self.spk_proj(spk_embed).unsqueeze(1)  # (B, 1, C)
+            memory = memory + g
+
+        # memory is (B, T_text, C)
         # memory_mask: True for padding positions
-        memory_key_padding_mask = text_mask.squeeze(1) == 0
+        memory_key_padding_mask = x_mask.squeeze(1) == 0
 
         # Add positional encoding and re-interpret text features for duration task
         memory = self.text_pe(memory)
@@ -99,6 +138,11 @@ class SpeechLengthPredictor(nn.Module):
             # Prepend length_query to mel_features to train it for total length prediction
             query = self.mel_norm(self.length_query.expand(B, -1, -1))
             tgt = torch.cat([query, mel_features], dim=1)
+
+            # Add speaker embedding as global condition to decoder input
+            if spk_embed is not None:
+                tgt = tgt + g
+
             tgt = self.mel_pe(tgt)
 
             seq_len = tgt.size(1)
@@ -116,7 +160,13 @@ class SpeechLengthPredictor(nn.Module):
         else:
             # Inference mode: Predict total length using a query
             query = self.mel_norm(self.length_query.expand(B, -1, -1))
-            tgt = self.mel_pe(query)
+            tgt = query
+
+            # Add speaker embedding as global condition to decoder input
+            if spk_embed is not None:
+                tgt = tgt + g
+
+            tgt = self.mel_pe(tgt)
             decoder_out = self.decoder(
                 tgt=tgt,
                 memory=memory,

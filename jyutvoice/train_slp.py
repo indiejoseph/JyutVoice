@@ -78,15 +78,22 @@ class SLPLightningModule(L.LightningModule):
         syllable_pos = batch["syllable_pos"]
         spk_embed = batch["spk_embed"]
 
-        with torch.no_grad():
-            # Get text features from TTS encoder
-            text_features, _, x_mask = self.tts.encoder(
-                x, x_lengths, lang, tone, word_pos, syllable_pos, spk_embed
-            )
+        # Create x_mask (B, 1, T_text)
+        from jyutvoice.utils.model import sequence_mask
 
-        # Predict remaining lengths
-        # predictions: (B, T_mel + 1, output_dim)
-        predictions = self.slp(text_features, x_mask, mel=y)
+        x_mask = sequence_mask(x_lengths, x.size(1)).unsqueeze(1).to(x.dtype)
+
+        # Predict remaining lengths using raw linguistic features
+        predictions = self.slp(
+            x,
+            x_mask,
+            lang=lang,
+            tone=tone,
+            word_pos=word_pos,
+            syllable_pos=syllable_pos,
+            spk_embed=spk_embed,
+            mel=y,
+        )
 
         # Target remaining lengths: (B, T_mel + 1)
         target_remain_lengths = calculate_remaining_lengths(y_lengths, max_L=y.size(-1))
@@ -257,11 +264,16 @@ def main():
     output_dim = args.n_class if args.loss_fn in ["CE", "L1_and_CE"] else 1
     hidden_dim = tts.encoder.n_channels
     slp = SpeechLengthPredictor(
+        n_vocab=tts.encoder.n_vocab,
+        n_lang=tts.encoder.lang_emb.num_embeddings,
+        n_tone=tts.encoder.tone_emb.num_embeddings,
         n_mel=80,
         hidden_dim=hidden_dim,
+        n_text_layer=4,
         n_cross_layer=4,
         n_head=8,
         output_dim=output_dim,
+        spk_embed_dim=192,
     )
     # Setup DataModule
     datamodule = cfg["data"]

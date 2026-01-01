@@ -129,7 +129,15 @@ class JyutVoiceTTS(BaseLightningClass):
         # Handle duration prediction
         if isinstance(self.dp, SpeechLengthPredictor):
             # If DP is an SLP, it predicts total length
-            slp_out = self.dp(x, x_mask)
+            slp_out = self.dp(
+                x,
+                x_mask,
+                lang=lang,
+                tone=tone,
+                word_pos=word_pos,
+                syllable_pos=syllable_pos,
+                spk_embed=spk_embed,
+            )
             if slp_out.dim() > 1 and slp_out.shape[-1] > 1:  # CE logits
                 total_length = (
                     torch.argmax(slp_out, dim=-1).float() * self.n_frame_per_class
