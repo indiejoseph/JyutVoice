@@ -233,6 +233,12 @@ def main():
         default=None,
         help="Path to SLP checkpoint to load weights",
     )
+    parser.add_argument(
+        "--max_duration",
+        type=float,
+        default=None,
+        help="Filter samples longer than this duration (seconds)",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -279,6 +285,8 @@ def main():
     datamodule = cfg["data"]
     if args.batch_size:
         datamodule.hparams.batch_size = args.batch_size
+    if args.max_duration:
+        datamodule.hparams.max_duration = args.max_duration
 
     # Prepare config for LightningModule
     slp_config = {

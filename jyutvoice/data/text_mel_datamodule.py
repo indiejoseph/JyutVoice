@@ -45,6 +45,7 @@ class TextMelDataModule(LightningDataModule):
         f_max,
         seed,
         load_durations,
+        max_duration=None,
     ):
         super().__init__()
 
@@ -63,6 +64,13 @@ class TextMelDataModule(LightningDataModule):
             ds = load_from_disk(self.hparams.dataset_path)
         else:
             ds = load_dataset(self.hparams.dataset_path, split="train")
+
+        if self.hparams.max_duration is not None:
+            ds = ds.filter(
+                lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"]
+                <= self.hparams.max_duration
+            )
+
         ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio)
 
         self.trainset = (

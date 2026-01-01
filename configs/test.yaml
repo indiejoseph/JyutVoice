@@ -121,6 +121,7 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
+  max_duration: 10.0
 
 trainer: !new:lightning.Trainer
   accelerator: auto
