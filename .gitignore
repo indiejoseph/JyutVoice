@@ -7,3 +7,4 @@ lightning_logs
 pretrained_models/*
 wandb
 jyutping-tts
+checkpoints
