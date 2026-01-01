@@ -66,9 +66,19 @@ class TextMelDataModule(LightningDataModule):
             ds = load_dataset(self.hparams.dataset_path, split="train")
 
         if self.hparams.max_duration is not None:
+
+            def filter_fn(batch):
+                durations = [
+                    len(a["array"]) / a["sampling_rate"] for a in batch["audio"]
+                ]
+                return [d <= self.hparams.max_duration for d in durations]
+
             ds = ds.filter(
-                lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"]
-                <= self.hparams.max_duration
+                filter_fn,
+                batched=True,
+                num_proc=(
+                    self.hparams.num_workers if self.hparams.num_workers > 0 else 1
+                ),
             )
 
         ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio)
