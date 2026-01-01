@@ -49,7 +49,7 @@ class SLPLightningModule(L.LightningModule):
         self.n_class = config.get("n_class", 301)
         self.gumbel_tau = config.get("gumbel_tau", 0.5)
         self.lr = config.get("lr", 1e-4)
-        self.warmup_updates = config.get("warmup_updates", 10000)
+        self.warmup_updates = config.get("warmup_updates", 5000)
 
         # Audio params for sec_error
         self.hop_length = config.get("hop_length", 480)
@@ -219,9 +219,7 @@ def main():
     parser.add_argument(
         "--gumbel_tau", type=float, default=0.5, help="Tau for Gumbel-Softmax"
     )
-    parser.add_argument(
-        "--warmup_updates", type=int, default=10000, help="Warmup steps"
-    )
+    parser.add_argument("--warmup_updates", type=int, default=5000, help="Warmup steps")
     parser.add_argument(
         "--checkpoint",
         type=str,
