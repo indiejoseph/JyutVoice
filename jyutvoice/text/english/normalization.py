@@ -247,9 +247,8 @@ def normalize(text):
     !!! 所有的处理都需要正确的输入 !!!
     可以添加新的处理，只需要添加正则表达式和对应的处理函数即可
     """
-
     text = re.sub(_ordinal_number_re, _convert_ordinal, text)
-    text = re.sub(r"(?<!\d)-|-(?!\d)", " minus ", text)
+    text = re.sub(r"(?<=\d)-(?=\d)|(?<!\w)-(?=\d)|(?<=\d)-(?!\w)", " minus ", text)
     text = re.sub(_comma_number_re, _remove_commas, text)
     text = re.sub(_time_re, _expand_time, text)
     text = re.sub(_measurement_re, _expand_measurement, text)

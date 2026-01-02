@@ -239,6 +239,12 @@ def main():
         default=None,
         help="Filter samples longer than this duration (seconds)",
     )
+    parser.add_argument(
+        "--max_text_length",
+        type=int,
+        default=None,
+        help="Filter samples with text longer than this length",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -287,6 +293,8 @@ def main():
         datamodule.hparams.batch_size = args.batch_size
     if args.max_duration:
         datamodule.hparams.max_duration = args.max_duration
+    if args.max_text_length:
+        datamodule.hparams.max_text_length = args.max_text_length
 
     # Prepare config for LightningModule
     slp_config = {

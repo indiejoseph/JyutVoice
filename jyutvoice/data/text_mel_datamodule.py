@@ -46,6 +46,7 @@ class TextMelDataModule(LightningDataModule):
         seed,
         load_durations,
         max_duration=None,
+        max_text_length=None,
     ):
         super().__init__()
 
@@ -75,6 +76,22 @@ class TextMelDataModule(LightningDataModule):
 
             ds = ds.filter(
                 filter_fn,
+                batched=True,
+                num_proc=(
+                    self.hparams.num_workers if self.hparams.num_workers > 0 else 1
+                ),
+            )
+
+        if self.hparams.max_text_length is not None:
+
+            def filter_text_fn(batch):
+                text_lengths = [
+                    len(t) if isinstance(t, str) else len(t) for t in batch["text"]
+                ]
+                return [tl <= self.hparams.max_text_length for tl in text_lengths]
+
+            ds = ds.filter(
+                filter_text_fn,
                 batched=True,
                 num_proc=(
                     self.hparams.num_workers if self.hparams.num_workers > 0 else 1
@@ -406,7 +423,7 @@ class TextMelBatchCollate:
                 item["spk_emb"],
                 item["decoder_h"],
             )
-            y_lengths.append(y_.shape[-1])
+            y_lengths.append(decoder_h_.shape[0])
             x_lengths.append(x_.shape[-1])
             y[i, :, : y_.shape[-1]] = y_
             x[i, : x_.shape[-1]] = x_
