@@ -8,3 +8,4 @@ pretrained_models/*
 wandb
 jyutping-tts
 checkpoints
+onnx_models

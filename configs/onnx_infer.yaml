@@ -1,0 +1,67 @@
+# ONNX Inference Configuration for JyutVoice TTS
+# This config only includes components needed for ONNX inference:
+# - Flow decoder (PyTorch)
+# - HiFT vocoder (PyTorch)
+# - Audio processing parameters
+# Text encoder and duration predictor are loaded as ONNX models separately
+
+# Audio processing params
+sample_rate: 24000
+hop_length: 480
+win_length: 1920
+n_fft: 1920
+f_min: 0
+f_max: null
+n_feats: 80
+spk_embed_dim: 192
+
+# HiFT Vocoder (PyTorch)
+hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
+  in_channels: 80
+  base_channels: 512
+  nb_harmonics: 8
+  sampling_rate: !ref <sample_rate>
+  nsf_alpha: 0.1
+  nsf_sigma: 0.003
+  nsf_voiced_threshold: 10
+  upsample_rates: [8, 5, 3]
+  upsample_kernel_sizes: [16, 11, 7]
+  istft_params:
+    n_fft: 16
+    hop_len: 4
+  resblock_kernel_sizes: [3, 7, 11]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  source_resblock_kernel_sizes: [7, 7, 11]
+  source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  lrelu_slope: 0.1
+  audio_limit: 0.99
+  f0_predictor: !new:jyutvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+    num_class: 1
+    in_channels: 80
+    cond_channels: 512
+
+# Flow Decoder (PyTorch) - CosyVoice2 Conditional Flow Matching
+decoder: !new:jyutvoice.flow.flow_matching.CausalConditionalCFM
+  in_channels: 240
+  n_spks: 1
+  spk_emb_dim: 80
+  cfm_params: !new:omegaconf.DictConfig
+    content:
+      sigma_min: 1e-06
+      solver: "euler"
+      t_scheduler: "cosine"
+      training_cfg_rate: 0.2
+      inference_cfg_rate: 0.7
+      reg_loss_type: "l1"
+  estimator: !new:jyutvoice.flow.decoder.CausalConditionalDecoder
+    in_channels: 320
+    out_channels: 80
+    channels: [256]
+    dropout: 0.0
+    attention_head_dim: 64
+    n_blocks: 4
+    num_mid_blocks: 12
+    num_heads: 8
+    act_fn: "gelu"
+    static_chunk_size: 50 # chunk_size (25) * token_mel_ratio (2)
+    num_decoding_left_chunks: -1 # Use all left chunks

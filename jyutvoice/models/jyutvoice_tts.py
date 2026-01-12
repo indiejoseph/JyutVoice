@@ -59,11 +59,12 @@ class JyutVoiceTTS(BaseLightningClass):
         word_pos,
         syllable_pos,
         spk_embed,
-        prompt_feat,
+        prompt_feat=None,
         prompt_h=None,
         n_timesteps=10,
         temperature=1.0,
         length_scale=1.0,
+        streaming=False,
     ):
         """
         Generates mel-spectrogram from text. Returns:
@@ -95,6 +96,7 @@ class JyutVoiceTTS(BaseLightningClass):
             temperature (float, optional): controls variance of diffusion. Defaults to 1.0.
             length_scale (float, optional): controls speech pace.
                 Increase value to slow down generated speech and vice versa. Defaults to 1.0.
+            streaming (bool, optional)
 
         Returns:
             dict: {
@@ -183,12 +185,9 @@ class JyutVoiceTTS(BaseLightningClass):
             )
 
         if prompt_feat is not None and prompt_h is not None:
-            mu_y = torch.cat([prompt_h.transpose(1, 2), mu_y], dim=2)
             n_mel = prompt_feat.shape[2]
-            mel_len1, mel_len2 = (
-                prompt_feat.shape[1],
-                mu_y.shape[2] - prompt_feat.shape[1],
-            )
+            mel_len1, mel_len2 = prompt_feat.shape[1], mu_y.shape[2]
+            mu_y = torch.cat([prompt_h.transpose(1, 2), mu_y], dim=2)
             conds = torch.zeros([1, mel_len1 + mel_len2, n_mel], device=x.device).to(
                 mu_y.dtype
             )
@@ -213,7 +212,7 @@ class JyutVoiceTTS(BaseLightningClass):
                 cond=conds,
                 n_timesteps=n_timesteps,
                 temperature=temperature,
-                streaming=False,
+                streaming=streaming,
             )
             decoder_outputs = decoder_outputs[:, :, mel_len1:]
 

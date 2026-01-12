@@ -236,3 +236,69 @@ class TrtContextWrapper:
 
     def release_estimator(self, context, stream):
         self.trt_context_pool.put([context, stream])
+
+
+class TrtContextWrapper:
+    def __init__(self, trt_engine, trt_concurrent=1, device="cuda:0"):
+        self.trt_context_pool = queue.Queue(maxsize=trt_concurrent)
+        self.trt_engine = trt_engine
+        for _ in range(trt_concurrent):
+            trt_context = trt_engine.create_execution_context()
+            trt_stream = torch.cuda.stream(torch.cuda.Stream(device))
+            assert (
+                trt_context is not None
+            ), "failed to create trt context, maybe not enough CUDA memory, try reduce current trt concurrent {}".format(
+                trt_concurrent
+            )
+            self.trt_context_pool.put([trt_context, trt_stream])
+        assert self.trt_context_pool.empty() is False, "no avaialbe estimator context"
+
+    def acquire_estimator(self):
+        return self.trt_context_pool.get(), self.trt_engine
+
+    def release_estimator(self, context, stream):
+        self.trt_context_pool.put([context, stream])
+
+
+def convert_onnx_to_trt(trt_model, trt_kwargs, onnx_model, fp16):
+    import tensorrt as trt
+
+    print("Converting onnx to trt...")
+    network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    logger = trt.Logger(trt.Logger.INFO)
+    builder = trt.Builder(logger)
+    network = builder.create_network(network_flags)
+    parser = trt.OnnxParser(network, logger)
+    config = builder.create_builder_config()
+    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 32)  # 4GB
+    if fp16:
+        config.set_flag(trt.BuilderFlag.FP16)
+    profile = builder.create_optimization_profile()
+    # load onnx model
+    with open(onnx_model, "rb") as f:
+        if not parser.parse(f.read()):
+            for error in range(parser.num_errors):
+                print(parser.get_error(error))
+            raise ValueError("failed to parse {}".format(onnx_model))
+    # set input shapes
+    for i in range(len(trt_kwargs["input_names"])):
+        profile.set_shape(
+            trt_kwargs["input_names"][i],
+            trt_kwargs["min_shape"][i],
+            trt_kwargs["opt_shape"][i],
+            trt_kwargs["max_shape"][i],
+        )
+    tensor_dtype = trt.DataType.HALF if fp16 else trt.DataType.FLOAT
+    # set input and output data type
+    for i in range(network.num_inputs):
+        input_tensor = network.get_input(i)
+        input_tensor.dtype = tensor_dtype
+    for i in range(network.num_outputs):
+        output_tensor = network.get_output(i)
+        output_tensor.dtype = tensor_dtype
+    config.add_optimization_profile(profile)
+    engine_bytes = builder.build_serialized_network(network, config)
+    # save trt engine
+    with open(trt_model, "wb") as f:
+        f.write(engine_bytes)
+    print("Succesfully convert onnx to trt...")

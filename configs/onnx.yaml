@@ -1,0 +1,69 @@
+# ONNX Export Configuration for JyutVoice TTS Components
+
+# Model checkpoint to export
+checkpoint_path: "pretrained_models/20260102_encoder_only.ckpt"
+
+# Base configuration
+base_config: "configs/base.yaml"
+
+# Export settings
+export:
+  # Output directory for ONNX models
+  output_dir: "onnx_models"
+
+  # Text encoder export settings
+  text_encoder:
+    enabled: true
+    filename: "text_encoder.onnx"
+    opset_version: 17
+
+    # Dynamic axes for variable-length inputs (CRITICAL for variable sequence lengths)
+    dynamic_axes:
+      x: { 0: "batch", 1: "seq_len" }
+      x_lengths: { 0: "batch" }
+      lang: { 0: "batch", 1: "seq_len" }
+      tone: { 0: "batch", 1: "seq_len" }
+      word_pos: { 0: "batch", 1: "seq_len" }
+      syllable_pos: { 0: "batch", 1: "seq_len" }
+      spk_embed: { 0: "batch" }
+      encoder_output: { 0: "batch", 2: "seq_len" }
+      mu_x: { 0: "batch", 2: "seq_len" }
+      x_mask: { 0: "batch", 2: "seq_len" }
+
+    # Example input shapes for tracing
+    example_inputs:
+      batch_size: 1
+      seq_len: 50
+      n_vocab: 97
+      spk_embed_dim: 192
+
+  # Duration predictor export settings
+  duration_predictor:
+    enabled: true
+    filename: "duration_predictor.onnx"
+    opset_version: 17
+
+    # Dynamic axes (CRITICAL for variable sequence lengths)
+    dynamic_axes:
+      encoder_output: { 0: "batch", 2: "seq_len" }
+      x_mask: { 0: "batch", 2: "seq_len" }
+      log_durations: { 0: "batch", 2: "seq_len" }
+
+    # Example input shapes
+    example_inputs:
+      batch_size: 1
+      seq_len: 50
+      n_vocab: 97
+      spk_embed_dim: 192
+
+# Validation settings
+validation:
+  # Run inference test after export
+  test_inference: true
+
+  # Number of test samples
+  num_test_samples: 3
+
+  # Tolerance for output comparison (PyTorch vs ONNX)
+  atol: 1e-4
+  rtol: 1e-3
