@@ -1,0 +1,44 @@
+# JyutVoice TTS API on the CPU.
+#     cp docker/.env.example docker/.env   # set API_KEY
+#     docker compose -f docker/docker-compose.yml up -d --build
+# The weights are mounted, not baked in: onnx_models/ comes from `python scripts/export_onnx.py`, pretrained_models/ needs flow_decoder.pt, hift.pt and campplus.onnx.
+name: jyutvoice
+
+services:
+  jyutvoice-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: jyutvoice-api:cpu
+    container_name: jyutvoice-api
+    restart: unless-stopped
+    environment:
+      # Bearer key of POST /v1/audio/speech (the request header is `Authorization: Bearer <key>`); the server refuses to start without a real one
+      API_KEY: "${API_KEY:?API_KEY must be set (see docker/.env.example)}"
+      REQUIRE_API_KEY: "${REQUIRE_API_KEY:-true}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+      ONNX_DIR: /app/onnx_models
+      PRETRAINED_DIR: /app/pretrained_models
+      # Threads: set TORCH_NUM_THREADS to the number of CPUs the container may use (it cannot see a cpus limit); 0 is all the host's cores
+      TORCH_NUM_THREADS: "${TORCH_NUM_THREADS:-0}"
+      ONNX_NUM_THREADS: "${ONNX_NUM_THREADS:-2}"
+      FLOW_STEPS: "${FLOW_STEPS:-10}"
+      LENGTH_SCALE: "${LENGTH_SCALE:-1.1}"
+      NORMALIZE_LOUDNESS: "${NORMALIZE_LOUDNESS:-true}"
+      OUTPUT_LEVEL_DBFS: "${OUTPUT_LEVEL_DBFS:--20}"
+      MAX_CHUNK_CHARS: "${MAX_CHUNK_CHARS:-100}"
+      MAX_INPUT_CHARS: "${MAX_INPUT_CHARS:-5000}"
+      PROMPT_CACHE_SIZE: "${PROMPT_CACHE_SIZE:-64}"
+      WARMUP: "${WARMUP:-true}"
+    ports:
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
+    volumes:
+      - ${ONNX_MODELS_DIR:-../onnx_models}:/app/onnx_models:ro
+      - ${PRETRAINED_MODELS_DIR:-../pretrained_models}:/app/pretrained_models:ro
+    cpus: ${CPUS:-0}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s

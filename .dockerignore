@@ -1,0 +1,9 @@
+# Build context of docker/Dockerfile: only what the API image runs. Weights are mounted at run time (docker/docker-compose.yml).
+*
+!api
+!jyutvoice
+!bert
+!configs/onnx_infer.yaml
+!infer_onnx.py
+**/__pycache__
+**/*.pyc
