@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%235b8cff%27/%3E%3Cpath d=%27M7 18v-4m4 8V10m5 14V8m5 14V10m4 8v-4%27 stroke=%27white%27 stroke-width=%273%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<title>JyutVoice Playground</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171b24;
+    --panel-2: #1e2330;
+    --border: #2a3040;
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #5b8cff;
+    --accent-2: #7aa0ff;
+    --danger: #ff6b6b;
+    --ok: #4ade80;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans CJK HK", "Noto Sans CJK TC", sans-serif;
+    background: radial-gradient(1200px 600px at 70% -10%, #1b2340 0%, var(--bg) 55%);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+  }
+  textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 120px; line-height: 1.5; }
+  button {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background .15s;
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+  }
+  button:hover { background: var(--accent-2); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); flex: 1; }
+  button.secondary.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .hidden { display: none !important; }
+  .audio-box { margin-top: 16px; }
+  .audio-box audio { width: 100%; }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  #status { margin-top: 14px; font-size: 13.5px; color: var(--muted); min-height: 20px; }
+  #status.error { color: var(--danger); }
+  #status.ok { color: var(--ok); }
+  .spin {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .params { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .param label { margin-bottom: 4px; }
+  .tag { font-size: 12px; color: var(--muted); }
+  .swatch { font-size: 11.5px; color: var(--muted); }
+  .badge {
+    display: inline-block; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; margin-left: 6px; vertical-align: middle;
+  }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.bad { color: var(--danger); border-color: var(--danger); }
+  .preset-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .preset-btns button {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); font-weight: 500; font-size: 13px; padding: 8px 14px; flex: none;
+  }
+  details { margin-top: 0; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; padding: 20px;
+  }
+  .modal-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    max-width: 760px; width: 100%; padding: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .modal-head strong { font-size: 15px; }
+  .close { background: none; border: none; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer; padding: 0; }
+  .close:hover { color: var(--text); background: none; }
+  button.api-call { height: 42px; padding: 0 14px; flex: none; }
+  .modal-box pre {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; overflow: auto; font-size: 12.5px; line-height: 1.5;
+    max-height: 55vh; white-space: pre; color: var(--text); margin: 0 0 12px;
+  }
+  .modal-box code, .hint code { background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Voice Studio <span class="badge" id="health">checking…</span></h1>
+  <p class="sub">Cantonese text-to-speech with English words mixed in · JyutVoice · your reference clip sets the voice</p>
+
+  <div class="card">
+    <label>Voice</label>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      <button class="secondary" id="mode-default" style="flex:none;">Preset voices</button>
+      <button class="secondary" id="mode-custom" style="flex:none;">Upload custom voice</button>
+    </div>
+    <div id="default-wrap">
+      <label for="voice-preset">Reference voice</label>
+      <select id="voice-preset" style="margin-bottom:10px;"></select>
+      <div class="swatch" id="voice-note"></div>
+    </div>
+    <div id="custom-wrap" class="hidden">
+      <label for="ref-audio">Reference audio (wav, flac, ogg, mp3, m4a)</label>
+      <input type="file" id="ref-audio" accept="audio/*" style="padding:6px; font-size:13px;">
+      <p class="hint">Any clip of the voice you want, at least 0.5 s; only the first 30 s are used. Only the speaker's voice print is taken from it, so no transcript is needed. A clean, close-up recording of 5–10 s works best.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between;">
+      <label for="text" style="margin-bottom:0;">Text to synthesize</label>
+      <button type="button" class="secondary api-call" id="api-call">API call</button>
+    </div>
+    <textarea id="text" style="margin-top:12px;" maxlength="5000" placeholder="Type what you want the voice to say…"></textarea>
+    <div class="preset-btns" id="examples"><span class="tag" style="margin-top:8px;">Examples:</span></div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Advanced parameters</summary>
+      <div class="params" style="margin-top:12px;">
+        <div class="param"><label for="seed">Seed</label><input type="number" id="seed" min="0" step="1" placeholder="random"></div>
+        <div class="param"><label for="speed">Speed</label><input type="number" id="speed" min="0.25" max="4" step="0.05" placeholder="1.0"></div>
+        <div class="param"><label for="flow_steps">Flow steps</label><input type="number" id="flow_steps" min="1" max="50" step="1" placeholder="10"></div>
+        <div class="param"><label for="dp_temperature">Duration noise</label><input type="number" id="dp_temperature" min="0" max="2" step="0.05" placeholder="0.3"></div>
+        <div class="param"><label for="prosody_temperature">Prosody noise</label><input type="number" id="prosody_temperature" min="0" max="2" step="0.05" placeholder="0.5"></div>
+        <div class="param"><label for="prosody">ProsodyCFM</label>
+          <select id="prosody"><option value="" selected>Default (on)</option><option value="true">On</option><option value="false">Off</option></select></div>
+        <div class="param"><label for="normalize_text">Read out numbers</label>
+          <select id="normalize_text"><option value="" selected>Default (yes)</option><option value="true">Yes</option><option value="false">No (text as is)</option></select></div>
+        <div class="param"><label for="stream">Streaming</label>
+          <select id="stream"><option value="false" selected>No</option><option value="true">Yes</option></select></div>
+      </div>
+      <p class="hint" style="margin-top:10px;">Leave a box empty to use the server's default (shown grey). The same seed with the same text, voice and settings gives the same audio again; after each take the seed it used is shown, with a button to keep it.
+      Fewer flow steps are faster on a CPU but were not quality-checked (only 10 were). Streaming plays each piece as the API finishes it.</p>
+    </details>
+  </div>
+
+  <div style="display:flex; gap:12px; align-items:center;">
+    <button id="generate">
+      <span class="spin hidden" id="spin"></span>
+      <span id="btn-label">Generate speech</span>
+    </button>
+    <div class="tag">On a CPU a sentence takes about as long as it lasts.</div>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="card audio-box hidden" id="audio-box">
+    <label>Output</label>
+    <audio id="player" controls preload="auto"></audio>
+    <div style="display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; align-items:center;">
+      <button class="secondary" id="download" style="flex:none;">Download WAV</button>
+      <button class="secondary" id="replay" style="flex:none;">Replay</button>
+      <button class="secondary hidden" id="keep-seed" style="flex:none;"></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="curl-modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <strong>cURL API reference</strong>
+      <button type="button" class="close" id="curl-close" aria-label="Close">&times;</button>
+    </div>
+    <pre id="curl-code"></pre>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button type="button" id="curl-copy">Copy</button>
+      <span class="tag" id="curl-copied"></span>
+    </div>
+    <p class="hint">Endpoint: <code id="curl-endpoint"></code> · Set <code>API_KEY</code> to the server's key. Put the clip in <code>prompt_audio</code> as base64 (<code>base64 -w0 voice.wav</code>); a long clip makes a long
+    command line, so for real use write the body to a file and send <code>-d @request.json</code>. The response header <code>Prompt-Cache-Id</code> can replace the clip in later requests. Closes on <b>Esc</b>.</p>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let lastAudioUrl = null;
+let currentAudioBlob = null;
+let lastSeed = null;
+let voiceMode = "default";
+let presets = [];
+let apiUrl = "http://127.0.0.1:8000";
+
+const defaultText = "你好，好高興認識你！今日天氣好好，我哋一齊去飲茶，好唔好呀？";
+
+function setVoiceMode(mode) {
+  voiceMode = mode;
+  $("default-wrap").classList.toggle("hidden", mode !== "default");
+  $("custom-wrap").classList.toggle("hidden", mode !== "custom");
+  $("mode-default").classList.toggle("active", mode === "default");
+  $("mode-custom").classList.toggle("active", mode === "custom");
+}
+
+async function loadVoices() {
+  try {
+    presets = (await (await fetch("/api/voices")).json()).voices || [];
+  } catch (e) { presets = []; }
+  const main = $("voice-preset");
+  main.innerHTML = "";
+  for (const v of presets) main.add(new Option(v.name, v.id));
+  const syncNote = () => { const v = presets.find((p) => p.id === main.value); $("voice-note").textContent = v ? "Reference clip · " + v.note : ""; };
+  main.addEventListener("change", syncNote);
+  syncNote();
+}
+
+const examples = [
+  { label: "Cantonese", t: defaultText },
+  { label: "Code-mixed", t: "我部iPhone冇電，所以要搵個charger先。下晝三點半有個meeting，記得帶laptop同埋notebook。" },
+  { label: "Numbers", t: "今日係2026年10月21日，氣溫28度，我買咗3個蘋果，一共$45.5，仲有20%折扣。" },
+  { label: "Long text", t: "香港係一個好有特色嘅城市，白天有高樓大廈同繁忙嘅街道，夜晚就有成片璀璨嘅燈火。你可以喺茶餐廳食一碗熱辣辣嘅雲吞麵，之後行去海旁睇維港夜景，感受一下呢個城市獨有嘅節奏。" },
+];
+for (const ex of examples) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = ex.label;
+  b.onclick = () => { $("text").value = ex.t; };
+  $("examples").appendChild(b);
+}
+
+function setStatus(msg, cls) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = cls || "";
+}
+
+function setBusy(busy) {
+  $("generate").disabled = busy;
+  $("spin").classList.toggle("hidden", !busy);
+  $("btn-label").textContent = busy ? "Generating…" : "Generate speech";
+}
+
+async function refreshHealth() {
+  const badge = $("health");
+  try {
+    const r = await fetch("/api/health");
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+    badge.textContent = j.model_loaded ? `ready · ${j.device}` : "loading models…";
+    badge.className = "badge " + (j.model_loaded ? "ok" : "");
+  } catch (e) {
+    badge.textContent = "API unreachable";
+    badge.className = "badge bad";
+    badge.title = e.message;
+  }
+}
+
+// ---- audio playback ------------------------------------------------------------------------------------------------------------------------------------
+let audioCtx = null;
+let workletNode = null;
+let workletReady = null;
+const SAMPLE_RATE = 24000;
+
+function ensureCtx() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) {
+      try { audioCtx = new AC({ sampleRate: SAMPLE_RATE }); }
+      catch (e) { audioCtx = new AC(); }
+    }
+  }
+  return audioCtx;
+}
+
+function stopPlayback() {
+  if (workletNode) {
+    try { workletNode.port.postMessage("reset"); workletNode.disconnect(); } catch (e) {}
+    workletNode = null;
+  }
+}
+
+function pcmToWav(pcmBytes) {
+  const n = pcmBytes.length;
+  const buf = new ArrayBuffer(44 + n);
+  const dv = new DataView(buf);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF"); dv.setUint32(4, 36 + n, true); writeStr(8, "WAVE");
+  writeStr(12, "fmt "); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, SAMPLE_RATE, true); dv.setUint32(28, SAMPLE_RATE * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  writeStr(36, "data"); dv.setUint32(40, n, true);
+  new Uint8Array(buf, 44).set(pcmBytes);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function finishWithBlob(blob) {
+  if (lastAudioUrl) URL.revokeObjectURL(lastAudioUrl);
+  currentAudioBlob = blob;
+  lastAudioUrl = URL.createObjectURL(blob);
+  $("player").src = lastAudioUrl;
+  $("audio-box").classList.remove("hidden");
+}
+
+function showSeed(seed) {
+  lastSeed = seed;
+  const b = $("keep-seed");
+  b.classList.toggle("hidden", seed === null);
+  if (seed !== null) b.textContent = "Keep seed " + seed;
+}
+
+// Continuous playback of a stream through an AudioWorklet ring buffer. Scheduling every arriving chunk as its own buffer source overlaps chunks that arrive late
+// and, when the context does not run at 24 kHz, resamples each buffer on its own, which leaves an audible seam at every edge; one uninterrupted stream has no edges.
+// No declicking at chunk joins: the API's chunks start and end in silence (measured step at a join 0.003, against steps over 0.02 in 20% of ordinary adjacent samples).
+const WORKLET_SRC = `
+class PcmRing extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = new Float32Array(sampleRate * 30);
+    this.r = 0; this.w = 0; this.done = false; this.starved = 0;
+    this.port.onmessage = (e) => {
+      if (e.data === "eos") { this.done = true; return; }
+      if (e.data === "reset") { this.r = this.w = 0; this.done = false; return; }
+      const d = e.data;
+      for (let i = 0; i < d.length; i++) { this.buf[this.w % this.buf.length] = d[i]; this.w++; }
+    };
+  }
+  process(_inputs, outputs) {
+    const out = outputs[0][0];
+    const avail = this.w - this.r;
+    if (!this.done && avail < out.length && this.r === 0) { out.fill(0); return true; }
+    for (let i = 0; i < out.length; i++) {
+      if (this.r < this.w) { out[i] = this.buf[this.r % this.buf.length]; this.r++; }
+      else { out[i] = 0; if (!this.done) this.starved++; }
+    }
+    if (this.done && this.r >= this.w) { this.port.postMessage({ ended: true, starved: this.starved }); return false; }
+    return true;
+  }
+}
+registerProcessor("pcm-ring", PcmRing);
+`;
+
+async function ensureWorklet(ctx) {
+  if (workletReady) return workletReady;
+  workletReady = (async () => {
+    const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+    try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+  })();
+  return workletReady;
+}
+
+// Linear resample of a continuous stream (the context rarely honours a 24 kHz request); done once over the stream, not per chunk.
+function resampleTail(f32, fromRate, toRate, state) {
+  if (fromRate === toRate) return f32;
+  const ratio = fromRate / toRate;
+  const out = [];
+  let pos = state.pos;
+  const prev = state.last;
+  let src;
+  if (prev === null) { src = f32; }
+  else { src = new Float32Array(f32.length + 1); src[0] = prev; src.set(f32, 1); }
+  if (prev !== null) pos += 1;
+  while (pos + 1 < src.length) {
+    const i = Math.floor(pos), frac = pos - i;
+    out.push(src[i] * (1 - frac) + src[i + 1] * frac);
+    pos += ratio;
+  }
+  state.last = src.length ? src[src.length - 1] : null;
+  state.pos = pos - (src.length - 1);
+  return Float32Array.from(out);
+}
+
+async function streamPlay(r, t0) {
+  const ctx = ensureCtx();
+  if (!ctx || !r.body || !ctx.audioWorklet) {
+    // No streaming playback here: take the whole PCM and play it as a file.
+    finishWithBlob(pcmToWav(new Uint8Array(await r.arrayBuffer())));
+    setStatus("Streaming playback is unsupported in this browser; loaded the full audio.", "ok");
+    return;
+  }
+  if (ctx.state === "suspended") { try { await ctx.resume(); } catch (e) {} }
+  await ensureWorklet(ctx);
+
+  stopPlayback();
+  workletNode = new AudioWorkletNode(ctx, "pcm-ring", { numberOfInputs: 0, outputChannelCount: [1] });
+  workletNode.connect(ctx.destination);
+  let starved = 0;
+  const ended = new Promise((resolve) => {
+    workletNode.port.onmessage = (e) => { starved = (e.data && e.data.starved) || 0; resolve(); };
+  });
+
+  const reader = r.body.getReader();
+  const rs = { pos: 0, last: null };
+  let firstAudioMs = null, bytes = 0;
+  let pending = new Uint8Array(0);
+  const parts = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value || !value.length) continue;
+    bytes += value.length;
+    setStatus(`Synthesizing… streaming · ${(bytes / 1024).toFixed(0)} KB received`, "");
+    parts.push(value);
+
+    const tmp = new Uint8Array(pending.length + value.length);
+    tmp.set(pending); tmp.set(value, pending.length);
+    pending = tmp;
+    const n = (pending.length >> 1) << 1;
+    if (n > 0) {
+      const f32 = new Float32Array(n >> 1);
+      const dv = new DataView(pending.buffer, pending.byteOffset, n);
+      for (let i = 0; i < f32.length; i++) f32[i] = dv.getInt16(i * 2, true) / 32768;
+      const out = resampleTail(f32, SAMPLE_RATE, ctx.sampleRate, rs);
+      if (out.length) {
+        workletNode.port.postMessage(out);
+        if (firstAudioMs === null) firstAudioMs = performance.now() - t0;
+      }
+      pending = pending.slice(n);
+    }
+  }
+  const streamedMs = performance.now() - t0;
+  workletNode.port.postMessage("eos");
+  await ended;
+  try { workletNode.disconnect(); } catch (e) {}
+  workletNode = null;
+
+  const all = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) { all.set(p, o); o += p.length; }
+  finishWithBlob(pcmToWav(all));
+  const info = [`streamed in ${(streamedMs / 1000).toFixed(2)}s`];
+  if (firstAudioMs !== null) info.push(`first audio after ${(firstAudioMs / 1000).toFixed(2)}s`);
+  info.push(`audio ${(all.length / 2 / SAMPLE_RATE).toFixed(1)}s`);
+  if (starved > 0) info.push(`${(starved / ctx.sampleRate).toFixed(2)}s underrun`);
+  const seed = r.headers.get("X-Seed");
+  if (seed) info.push(`seed ${seed}`);
+  showSeed(seed);
+  setStatus(`Done. ${info.join(" · ")}`, "ok");
+}
+
+// ---- request -----------------------------------------------------------------------------------------------------------------------------------------------
+function fileToDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error("cannot read " + file.name));
+    fr.readAsDataURL(file);
+  });
+}
+
+// Settings left empty are not sent, so the server's defaults apply.
+function readSettings() {
+  const num = (id, int) => { const v = $(id).value.trim(); if (v === "") return undefined; const x = int ? parseInt(v, 10) : parseFloat(v); return Number.isNaN(x) ? undefined : x; };
+  const flag = (id) => { const v = $(id).value; return v === "" ? undefined : v === "true"; };
+  return {
+    seed: num("seed", true), speed: num("speed"), flow_steps: num("flow_steps", true),
+    dp_temperature: num("dp_temperature"), prosody_temperature: num("prosody_temperature"),
+    prosody: flag("prosody"), normalize_text: flag("normalize_text"),
+  };
+}
+
+async function generate() {
+  const text = $("text").value.trim();
+  if (!text) { setStatus("Please enter some text to synthesize.", "error"); return; }
+
+  const payload = { text, stream: $("stream").value === "true", ...readSettings() };
+  if (voiceMode === "default") {
+    payload.voice_id = $("voice-preset").value;
+    if (!payload.voice_id) { setStatus("No preset voices are available: upload a reference clip instead.", "error"); return; }
+  } else {
+    const file = $("ref-audio").files[0];
+    if (!file) { setStatus("Please choose a reference audio file.", "error"); return; }
+    payload.prompt_audio = await fileToDataUri(file);
+  }
+
+  if (/\[S[1-4]\]/.test(text)) payload.stream = false;  // turns are made one by one and joined, so there is no single stream
+
+  stopPlayback();
+  const streaming = payload.stream;
+  setBusy(true);
+  setStatus(streaming ? "Generating… (streaming)" : "Generating… (a sentence takes about as long as it lasts)", "");
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/api/synthesize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = await r.json(); msg = j.error || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    if (streaming) {
+      await streamPlay(r, t0);
+    } else {
+      finishWithBlob(await r.blob());
+      const info = [`${((performance.now() - t0) / 1000).toFixed(2)}s`];
+      const audio = parseFloat(r.headers.get("X-Audio-Duration")), synth = parseFloat(r.headers.get("X-Synthesis-Time"));
+      if (audio) info.push(`audio ${audio.toFixed(1)}s`);
+      if (synth && audio) info.push(`synthesis ${synth.toFixed(1)}s (real-time factor ${(synth / audio).toFixed(2)})`);
+      const turns = r.headers.get("X-Dialogue-Turns");
+      if (turns) info.push(`${turns} turns`);
+      const seed = r.headers.get("X-Seed");
+      if (seed) info.push(`seed ${seed}`);
+      showSeed(seed);
+      setStatus(`Done in ${info.join(" · ")}. Press play to hear it.`, "ok");
+    }
+  } catch (e) {
+    setStatus("Error: " + e.message, "error");
+  } finally {
+    setBusy(false);
+    refreshHealth();
+  }
+}
+
+$("generate").addEventListener("click", generate);
+$("download").addEventListener("click", () => {
+  if (!currentAudioBlob) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(currentAudioBlob);
+  a.download = "jyutvoice_output.wav";
+  a.click();
+});
+$("replay").addEventListener("click", () => { if (lastAudioUrl) { $("player").currentTime = 0; $("player").play(); } });
+$("keep-seed").addEventListener("click", () => { if (lastSeed !== null) $("seed").value = lastSeed; });
+$("mode-default").addEventListener("click", () => setVoiceMode("default"));
+$("mode-custom").addEventListener("click", () => setVoiceMode("custom"));
+
+// ---- the API call as a curl command ------------------------------------------------------------------------------------------------------------------------
+function buildCurlPayload() {
+  const payload = { input: $("text").value.trim() || defaultText, prompt_audio: "<base64 of the reference clip>" };
+  for (const [k, v] of Object.entries(readSettings())) if (v !== undefined) payload[k] = v;
+  if ($("stream").value === "true") { payload.stream = true; payload.format = "pcm"; }
+  return payload;
+}
+
+function showCurl() {
+  const body = JSON.stringify(buildCurlPayload(), null, 2);
+  const out = $("stream").value === "true" ? "speech.pcm" : "speech.wav";
+  $("curl-endpoint").textContent = apiUrl + "/v1/audio/speech";
+  $("curl-code").textContent = `curl ${apiUrl}/v1/audio/speech \\\n  -H "Authorization: Bearer $API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -o ${out} \\\n  --data "$(cat <<'JSON'\n${body}\nJSON\n)"`;
+  $("curl-copied").textContent = "";
+  $("curl-modal").classList.remove("hidden");
+}
+
+function hideCurl() {
+  $("curl-modal").classList.add("hidden");
+  $("curl-copied").textContent = "";
+}
+
+$("api-call").addEventListener("click", showCurl);
+$("curl-close").addEventListener("click", hideCurl);
+$("curl-modal").addEventListener("click", (e) => { if (e.target === $("curl-modal")) hideCurl(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("curl-modal").classList.contains("hidden")) hideCurl(); });
+$("curl-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("curl-code").textContent);
+    $("curl-copied").textContent = "Copied!";
+  } catch (e) {
+    $("curl-copied").textContent = "Copy failed — select and copy manually.";
+  }
+});
+
+$("text").value = defaultText;
+setVoiceMode("default");
+loadVoices();
+refreshHealth();
+setInterval(refreshHealth, 30000);
+fetch("/api/config").then((r) => r.json()).then((j) => { if (j.api_url) apiUrl = j.api_url; }).catch(() => {});
+</script>
+</body>
+</html>

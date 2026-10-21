@@ -1,0 +1,32 @@
+# Playground of the JyutVoice API. Run from the repository root, reusing the API's key from docker/.env (it is not copied anywhere else):
+#     docker compose -f docker/docker-compose.yml up -d --build                              # the API (once)
+#     docker compose -f playground/docker-compose.yml --env-file docker/.env up -d --build   # the playground, http://127.0.0.1:8898
+# It joins the network the API's compose project creates (jyutvoice_default) and reaches the API by its container name.
+name: jyutvoice-playground
+
+services:
+  playground:
+    build: .
+    image: jyutvoice-playground
+    container_name: jyutvoice-playground
+    restart: unless-stopped
+    environment:
+      JYUTVOICE_URL: http://jyutvoice-api:8000
+      # The playground sends this as the Bearer key; the browser never sees it.
+      JYUTVOICE_API_KEY: "${API_KEY:?API_KEY must be set: run with --env-file docker/.env}"
+      # Only shown in the page's cURL example: where clients reach the API from outside.
+      JYUTVOICE_PUBLIC_URL: "${JYUTVOICE_PUBLIC_URL:-http://127.0.0.1:8000}"
+      HOST: 0.0.0.0
+    # Whoever can reach this port can synthesise with the API key: keep it on localhost unless it sits behind a login or a private network.
+    ports:
+      - "${PLAYGROUND_BIND_HOST:-127.0.0.1}:${PLAYGROUND_PORT:-8898}:8898"
+    volumes:
+      # clips that are not in the repository (git-ignored); an empty or missing folder is fine
+      - ./voices.local:/app/voices.local:ro
+    networks:
+      - api
+
+networks:
+  api:
+    name: jyutvoice_default
+    external: true

@@ -1,0 +1,10 @@
+[
+  {"id": "yue-low-1", "name": "Cantonese · lower voice 1", "file": "yue-low-1.wav", "f0": 111,
+   "text": "而家乜嘢鬥圖嘅，我都少用，語音用嘅就更加少", "source": "Mozilla Common Voice Cantonese (CC0), common_voice_yue_34941149"},
+  {"id": "yue-high-1", "name": "Cantonese · higher voice 1", "file": "yue-high-1.wav", "f0": 236,
+   "text": "有唔少都係涉恐，危害社會安全", "source": "Mozilla Common Voice Cantonese (CC0), common_voice_yue_31739581"},
+  {"id": "yue-low-2", "name": "Cantonese · lower voice 2", "file": "yue-low-2.wav", "f0": 123,
+   "text": "而家其實主要為到安卓版先有語音閱讀廣東話", "source": "Mozilla Common Voice Cantonese (CC0), common_voice_yue_33505010"},
+  {"id": "yue-high-2", "name": "Cantonese · higher voice 2", "file": "yue-high-2.wav", "f0": 236,
+   "text": "只要你捐錢夠多，就可以話晒事", "source": "Mozilla Common Voice Cantonese (CC0), common_voice_yue_31734398"}
+]
