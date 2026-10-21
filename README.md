@@ -2,6 +2,8 @@
 
 **A high-quality Cantonese text-to-speech system with transfer learning for fast training and excellent quality.**
 
+> Working on this repository (human or agent)? Start with [`docs/README.md`](docs/README.md): architecture, text front end, training recipe, inference/API, evaluation, and the decisions and known issues that should not be re-litigated.
+
 ## Features
 
 - 🎤 High-quality 24kHz Cantonese speech synthesis
@@ -87,7 +89,47 @@ mel_spec = output['decoder_outputs']  # (1, 80, mel_length)
 
 ### Best model
 
-The current best configuration is the encoder + flow duration sampler (`checkpoints/best/jyutvoice_flowdp_epoch019.ckpt`) with the frame-level `ProsodyCFM` trained on corpus + teacher rows (`checkpoints/best/prosody_cfm_mix1.pt`, noise 0.5). `JyutVoiceTTS.synthesise(..., use_prosody=True)` samples the decoder input with it; the ProsodyCFM defaults (noise 0.5, no guidance, 10 steps) are the chosen ones. Settings, scores and a render command are in `checkpoints/best/README.md`. The ONNX path (`infer_onnx.py`) does not include it yet.
+The current best configuration is the encoder + flow duration sampler (`checkpoints/best/jyutvoice_flowdp_epoch019.ckpt`) with the frame-level `ProsodyCFM` trained on corpus + teacher rows (`checkpoints/best/prosody_cfm_mix1.pt`, noise 0.5). `JyutVoiceTTS.synthesise(..., use_prosody=True)` samples the decoder input with it; the ProsodyCFM defaults (noise 0.5, no guidance, 10 steps) are the chosen ones. Settings, scores and a render command are in `checkpoints/best/README.md`.
+
+The English-capable successor (encoder `checkpoints_yue_en`, its flow duration sampler and a ProsodyCFM trained on its features; Cantonese + English code-mixing) is what `configs/export_onnx.yaml` exports by default. It reads English words much better (97% of English words recognised against 47% before) at the cost of about one point of Cantonese syllable error rate; its sampler renders about 10% shorter than the teacher (median length ratio 0.90 on 60 held-out sentences), `--length_scale 1.1` calibrates it (0.99).
+
+### ONNX inference
+
+The text encoder, the duration model (flow-matching sampler or regression predictor) and ProsodyCFM run in ONNX Runtime; the CosyVoice2 flow decoder and HiFT stay in PyTorch.
+
+```bash
+# 1. export (graphs + manifest.json in onnx_models/; every graph is checked against PyTorch, the whole chain against JyutVoiceTTS.synthesise)
+python scripts/export_onnx.py                      # checkpoint, config and ProsodyCFM weights come from configs/export_onnx.yaml
+python scripts/export_onnx.py --checkpoint checkpoints/best/jyutvoice_flowdp_epoch019.ckpt \
+    --prosody-ckpt checkpoints/best/prosody_cfm_mix1.pt --output-dir onnx_models_best   # the Cantonese-only best
+
+# 2. synthesise (text is normalised, word-segmented with pydips and read by g2p like in training)
+python infer_onnx.py --onnx_dir onnx_models --text "我喺Zoom開會，但係個microphone有問題。" --ref_audio ref.wav --output out.wav
+```
+
+The flow decoder gets only the x-vector of the reference clip, no clip prompt (that needs the speech tokenizer and the flow encoder), unlike `synthesise(..., prompt_feat=...)`. `--no_prosody` skips ProsodyCFM, `--segmentation given` takes text that is already word-segmented (no pydips needed). The sampler graphs take their random noise as an input and the Euler loops are unrolled in the graph (10 steps, as exported). The text encoder accepts at most `max_tokens` (1024, about 30 s of speech) tokens: longer text must be split at punctuation. The rotary position tables are baked into the graph, which is why the limit is fixed at export time.
+
+### HTTP API (Docker, CPU)
+
+`api/` is a FastAPI service over the ONNX path and `docker/` runs it on the CPU. The reference clip comes in the request as base64 (`prompt_audio`), the endpoints and the request shape follow the SoulX-Podcast API (`GET /`, `GET /health`, `POST /v1/audio/speech` with Bearer auth, a `Prompt-Cache-Id` voice cache and optional streaming).
+
+```bash
+cp docker/.env.example docker/.env      # set API_KEY (openssl rand -hex 32)
+docker compose -f docker/docker-compose.yml up -d --build   # needs onnx_models/ (see above) and pretrained_models/ next to it
+python api/test_client.py --ref ref.wav --text "我喺Zoom開會，但係個microphone有問題。" --output out.wav
+```
+
+The weights are mounted into the container, not baked into the image. On a CPU the flow decoder and vocoder dominate: about real time at 10 flow steps. See `api/README.md` for the fields, errors, settings and what differs from the SoulX-Podcast API.
+
+#### Playground
+
+`playground/` is a web page for trying the API (preset or uploaded voice, dialogues, seed, streaming, a copyable `curl` call), modelled on the SoulX-Podcast playground. With the API running:
+
+```bash
+docker compose -f playground/docker-compose.yml --env-file docker/.env up -d --build   # http://127.0.0.1:8898
+```
+
+It holds the API key itself and has no login, so keep it on localhost or behind one. See `playground/README.md`.
 
 ## Inference Examples
 
@@ -247,6 +289,10 @@ This will download and prepare:
 | Training is slow | Enable `bf16-mixed` precision, increase `num_workers` |
 | NaN losses | Reduce learning rate to `5e-5` |
 
+### Known issues
+
+- **English words inside Cantonese are not always right in sound or stress.** In the English-capable model, `Zoom` can sound like "drone" (its `z` and `m` get about one frame, 20 ms, where the aligned data has two to three) and `interview` has the stress in the wrong place. The text front end is correct (g2p gives the dictionary readings) and the recogniser hears both words correctly, so the error is in phone timing and prosody, which the ASR scores cannot see. The English phones are learned from only 27 h of Hong Kong speakers' code-mixed English. Hong Kong speakers do not use a native English accent when they mix English into Cantonese, so more native English speech is not assumed to be the fix. Not worked on; open until it is decided what the target pronunciation should be.
+
 ## Project Structure
 
 ```
@@ -267,6 +313,8 @@ jyutvoice-tts/
 │   ├── text/
 │   │   └── cleaners.py
 │   └── utils/
+├── api/                         # FastAPI service over the ONNX path (README.md, test_client.py)
+├── docker/                      # Dockerfile, docker-compose.yml, .env.example for the CPU API
 ├── pretrained_models/
 │   ├── pretrain.pt              # Transfer learning checkpoint (CosyVoice2 + modules init)
 │   ├── campplus.onnx            # Speaker embedding model (download from HF)
