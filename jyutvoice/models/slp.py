@@ -179,6 +179,41 @@ class SpeechLengthPredictor(nn.Module):
         return length_logits
 
 
+def ce_logits_to_length(logits, n_frame_per_class):
+    """Decode CE length logits (..., n_class) to a continuous length in frames.
+
+    Class c holds lengths [c * n_frame_per_class, (c + 1) * n_frame_per_class) (see train_slp). Returns the
+    median of the predicted distribution, interpolated inside its bin, which is what an L1 error is
+    minimised by. argmax * n_frame_per_class would be quantised and sit on the bin's lower edge.
+    """
+    p = torch.softmax(logits.float(), dim=-1)
+    cdf = torch.cumsum(p, dim=-1)
+    idx = (cdf < 0.5).sum(dim=-1, keepdim=True).clamp_max(p.size(-1) - 1)
+    p_idx = p.gather(-1, idx)
+    cdf_before = cdf.gather(-1, idx) - p_idx
+    frac = ((0.5 - cdf_before) / p_idx.clamp_min(1e-9)).clamp(0.0, 1.0)
+    return ((idx.float() + frac) * n_frame_per_class).squeeze(-1)
+
+
+def distribute_frames(w, x_mask, total_length):
+    """Scale per-token durations so they add up to a given total, in whole frames.
+
+    Args:
+        w: (B, 1, T) relative or absolute per-token durations, e.g. the duration predictor's exp(logw).
+        x_mask: (B, 1, T) 1 for real tokens, 0 for padding.
+        total_length: (B, 1) target number of frames per utterance, e.g. the SLP prediction.
+    Returns:
+        (B, 1, T) float tensor of integer durations. Cumulative rounding makes them sum to the (rounded)
+        total with no ceil bias; each real token keeps at least one frame, so a token that would round to
+        zero adds one extra frame and the sum can exceed the total by that many.
+    """
+    w = w * x_mask
+    scale = total_length.view(-1, 1, 1) / w.sum(dim=(1, 2), keepdim=True).clamp_min(1e-6)
+    cum = torch.round(torch.cumsum(w * scale, dim=-1))
+    dur = cum - F.pad(cum, (1, 0))[..., :-1]
+    return dur.clamp_min(1.0) * x_mask
+
+
 def calculate_remaining_lengths(mel_lengths, max_L=None):
     B = mel_lengths.shape[0]
     if max_L is None:

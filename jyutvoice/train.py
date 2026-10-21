@@ -2,11 +2,49 @@ import argparse
 from typing import Any, Dict, Optional, Tuple
 
 import lightning as L
+import torch
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import Logger
 from hyperpyyaml import load_hyperpyyaml
 
 from jyutvoice.utils import instantiators
+
+
+def attach_callbacks(trainer: Trainer, callbacks: list) -> None:
+    """Give the configured callbacks to a trainer that hyperpyyaml already built without them.
+
+    A configured ModelCheckpoint replaces the one Lightning adds by default, so checkpoints are not written twice.
+    """
+    if not callbacks:
+        return
+    if any(isinstance(c, ModelCheckpoint) for c in callbacks):
+        trainer.callbacks[:] = [c for c in trainer.callbacks if not isinstance(c, ModelCheckpoint)]
+    trainer.callbacks.extend(callbacks)
+
+
+def load_init_weights(model: LightningModule, path: str, prefixes=None) -> None:
+    """Warm start from a checkpoint: weights only, the optimizer and the epoch counter start fresh.
+
+    `prefixes` (e.g. ["encoder.", "spk_embed_affine_layer."]) loads only the checkpoint keys that start with one of them, for a model whose other
+    modules differ from the checkpoint's (a different duration predictor); every model parameter under those prefixes must then be in the checkpoint.
+
+    Unlike `ckpt_path` (which resumes everything) this works when the model gained parameters since the checkpoint was written, e.g.
+    `encoder.bert_proj.*` (the model's `on_load_checkpoint` starts those at zero). Accepts a Lightning checkpoint or a bare state dict.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)  # Lightning checkpoints pickle the hyper-parameters: use trusted files
+    if "state_dict" not in ckpt:
+        ckpt = {"state_dict": ckpt}
+    ckpt["epoch"] = 0
+    model.on_load_checkpoint(ckpt)
+    if prefixes:
+        prefixes = tuple(prefixes)
+        state = {k: v for k, v in ckpt["state_dict"].items() if k.startswith(prefixes)}
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        missing = [k for k in missing if k.startswith(prefixes)]
+        assert not missing and not unexpected, (missing, unexpected)
+        return
+    model.load_state_dict(ckpt["state_dict"])
 
 
 def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -25,6 +63,9 @@ def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     print(f"Instantiating model...")
     model: LightningModule = cfg["tts"]
+    if cfg.get("init_ckpt"):
+        print(f"Initialising weights from {cfg['init_ckpt']}")
+        load_init_weights(model, cfg["init_ckpt"], cfg.get("init_ckpt_prefixes"))
 
     print("Instantiating callbacks...")
     callbacks: list[Callback] = instantiators.instantiate_callbacks(
@@ -36,6 +77,7 @@ def train(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     print(f"Instantiating trainer...")
     trainer: Trainer = cfg.get("trainer", Trainer(max_epochs=100))
+    attach_callbacks(trainer, callbacks)
 
     # Attach logger to trainer if instantiated
     if logger:

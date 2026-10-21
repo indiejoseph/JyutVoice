@@ -16,13 +16,16 @@ def spectral_normalize_torch(magnitudes):
 
 
 def mel_spectrogram(
-    y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False
+    y,
+    n_fft=1920,
+    num_mels=80,
+    sampling_rate=24000,
+    hop_size=480,
+    win_size=1920,
+    fmin=0,
+    fmax=8000,
+    center=False,
 ):
-    if torch.min(y) < -1.0:
-        print("min value is ", torch.min(y))
-    if torch.max(y) > 1.0:
-        print("max value is ", torch.max(y))
-
     global mel_basis, hann_window  # pylint: disable=global-statement
     if f"{str(fmax)}_{str(y.device)}" not in mel_basis:
         mel = librosa_mel_fn(

@@ -342,7 +342,7 @@ class Encoder(nn.Module):
         if g is not None and self.gin_channels != 0:
             B, _, T = x.size()
             g = self.spk_emb_linear(g)
-            g = g.unsqueeze(-1).expand(B, self.gin_channels, T)
+            g = g.unsqueeze(-1).expand(B, self.hidden_channels, T)
 
         for i in range(self.n_layers):
             if i == self.cond_layer_idx and g is not None:
@@ -365,10 +365,12 @@ class TextEncoder(nn.Module):
         encoder_params,
         n_vocab,
         n_lang,  # 0: Cantonese, 1: Mandarin, 2: English
-        n_tone=7,  # PAD + 6 tones
+        n_tone=11,  # PAD + 6 Cantonese tones + 4 English stress ids (jyutvoice/text/english/stress.py)
+        bert_dim=0,  # width of the per-phone BERT features (jyutvoice.text.bert_align); 0 = no BERT input
     ):
         super().__init__()
         self.encoder_type = encoder_type
+        self.bert_dim = bert_dim
         self.n_vocab = n_vocab
         self.n_feats = encoder_params.n_feats
         self.n_channels = encoder_params.n_channels
@@ -395,6 +397,15 @@ class TextEncoder(nn.Module):
 
         self.syllable_pos = nn.Embedding(4, self.n_channels)  # Syllable positions [0-3]
         nn.init.normal_(self.syllable_pos.weight, 0.0, self.n_channels**-0.5)
+
+        if bert_dim > 0:
+            # Parameter-free LayerNorm and a bias-free Linear, so a row of zeros (a sample without BERT features) adds exactly nothing.
+            # The weight starts at zero: the model begins as the one without BERT and a checkpoint trained without it can be fine-tuned.
+            self.bert_proj = nn.Sequential(
+                nn.LayerNorm(bert_dim, elementwise_affine=False),
+                nn.Linear(bert_dim, self.n_channels, bias=False),
+            )
+            nn.init.zeros_(self.bert_proj[1].weight)
 
         if encoder_params.prenet:
             self.prenet = ConvReluNorm(
@@ -436,7 +447,16 @@ class TextEncoder(nn.Module):
     def output_size(self):
         return self.n_channels
 
-    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, g):
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # A checkpoint from before English stress had tone ids of its own (7 rows: pad + 6 Cantonese tones) loads into the larger table: its rows are
+        # kept, the new ones keep their initialisation.
+        key = prefix + "tone_emb.weight"
+        w = state_dict.get(key)
+        if w is not None and w.shape[0] < self.tone_emb.num_embeddings and w.shape[1:] == self.tone_emb.weight.shape[1:]:
+            state_dict[key] = torch.cat([w, self.tone_emb.weight.detach()[w.shape[0] :].to(w.dtype)])
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def forward(self, x, x_lengths, lang, tone, word_pos, syllable_pos, g, bert=None):
         """
         x: (B, T) input token IDs
         x_lengths: (B,) input lengths
@@ -445,6 +465,8 @@ class TextEncoder(nn.Module):
         word_pos: (B, T) word position IDs per token
         syllable_pos: (B, T) syllable position IDs per token
         g: (B, C_spk) global speaker embedding
+        bert: (B, T, bert_dim) BERT features repeated onto the phone positions (jyutvoice.text.bert_align.expand_to_phones, with the
+            same blanks as `x`); zeros where a sample has none. Optional: without it the encoder runs as if there were no BERT.
         """
 
         # --- token-level phoneme features (NO lang added here) ---
@@ -457,6 +479,11 @@ class TextEncoder(nn.Module):
         ) * math.sqrt(
             self.n_channels
         )  # (B, T, C)
+
+        if bert is not None:
+            if self.bert_dim == 0:
+                raise ValueError("BERT features were given to an encoder built with bert_dim=0")
+            x = x + self.bert_proj(bert.to(x.dtype))
 
         # (B, T, C) -> (B, C, T)
         x = x.transpose(1, 2)

@@ -7,11 +7,9 @@ import inspect
 import math
 from abc import ABC
 from typing import Any, Dict
-import wandb
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 from torch.optim.lr_scheduler import LambdaLR, SequentialLR
-import wandb
 
 from jyutvoice import utils
 from jyutvoice.utils.utils import plot_tensor
@@ -103,6 +101,11 @@ class BaseLightningClass(LightningModule, ABC):
             syllable_pos=syllable_pos,
             spk_embed=spk_embed,
             decoder_h=decoder_h,
+            bert=batch.get("bert"),
+            prior_weight=batch.get("prior_weight"),
+            silence=batch.get("silence"),
+            pause_mask=batch.get("pause_mask"),
+            dur_weight=batch.get("dur_weight"),
         )
         return {
             "dur_loss": dur_loss,
@@ -207,14 +210,8 @@ class BaseLightningClass(LightningModule, ABC):
                     try:
                         y = one_batch["y"][i].unsqueeze(0).to(self.device)
                         image = plot_tensor(y.squeeze().cpu())
-                        # Check if using wandb logger
-                        if hasattr(self.logger.experiment, "log"):
-                            self.logger.experiment.log(
-                                {f"original/{i}": wandb.Image(image)},
-                                step=self.current_epoch,
-                            )
-                        else:
-                            # Fallback to tensorboard API
+                        # Fallback to tensorboard API if available
+                        if hasattr(self.logger.experiment, "add_image"):
                             self.logger.experiment.add_image(
                                 f"original/{i}",
                                 image,
@@ -260,12 +257,7 @@ class BaseLightningClass(LightningModule, ABC):
                     # helper to log an image and swallow per-image errors
                     def _log_image(name, img_arr):
                         try:
-                            if hasattr(self.logger.experiment, "log"):
-                                self.logger.experiment.log(
-                                    {name: wandb.Image(img_arr)},
-                                    step=self.current_epoch,
-                                )
-                            else:
+                            if hasattr(self.logger.experiment, "add_image"):
                                 self.logger.experiment.add_image(
                                     name, img_arr, self.current_epoch, dataformats="HWC"
                                 )
@@ -275,8 +267,9 @@ class BaseLightningClass(LightningModule, ABC):
                     image_enc = plot_tensor(y_enc.squeeze().cpu())
                     _log_image(f"generated_enc/{i}", image_enc)
 
-                    image_dec = plot_tensor(y_dec.squeeze().cpu())
-                    _log_image(f"generated_dec/{i}", image_dec)
+                    if y_dec is not None:  # encoder-only runs (decoder: null) have no decoder output
+                        image_dec = plot_tensor(y_dec.squeeze().cpu())
+                        _log_image(f"generated_dec/{i}", image_dec)
 
                     image_attn = plot_tensor(attn.squeeze().cpu())
                     _log_image(f"alignment/{i}", image_attn)
