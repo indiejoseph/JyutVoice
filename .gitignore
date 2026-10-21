@@ -9,3 +9,4 @@ wandb
 jyutping-tts
 checkpoints
 onnx_models
+checkpoints_*

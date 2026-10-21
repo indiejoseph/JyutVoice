@@ -85,6 +85,10 @@ with torch.no_grad():
 mel_spec = output['decoder_outputs']  # (1, 80, mel_length)
 ```
 
+### Best model
+
+The current best configuration is the encoder + flow duration sampler (`checkpoints/best/jyutvoice_flowdp_epoch019.ckpt`) with the frame-level `ProsodyCFM` trained on corpus + teacher rows (`checkpoints/best/prosody_cfm_mix1.pt`, noise 0.5). `JyutVoiceTTS.synthesise(..., use_prosody=True)` samples the decoder input with it; the ProsodyCFM defaults (noise 0.5, no guidance, 10 steps) are the chosen ones. Settings, scores and a render command are in `checkpoints/best/README.md`. The ONNX path (`infer_onnx.py`) does not include it yet.
+
 ## Inference Examples
 
 Use the provided `infer.py` script for easy text-to-speech synthesis with voice cloning:
