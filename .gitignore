@@ -9,6 +9,7 @@ wandb
 jyutping-tts
 checkpoints
 onnx_models
+onnx_models_*
 checkpoints_*
 
 # model weights, wherever they are saved
@@ -17,3 +18,9 @@ checkpoints_*
 *.pth
 *.safetensors
 *.onnx
+
+# API container settings (holds API_KEY)
+docker/.env
+
+# playground voices that must not enter the public repository (clips of corpus speakers)
+playground/voices.local/

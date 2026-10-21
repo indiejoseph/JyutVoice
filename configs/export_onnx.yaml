@@ -1,109 +1,24 @@
-# ONNX Export and Inference Configuration for JyutVoice TTS Components
-# This config specifies parameters for exporting text encoder and duration predictor to ONNX format
-# and includes decoder/vocoder definitions for ONNX inference
+# Defaults of scripts/export_onnx.py (every entry can be overridden on its command line).
+# Exports the latest model: the English-capable encoder, its flow-matching duration sampler and the ProsodyCFM trained on its features.
 
-# Model checkpoint to export
-checkpoint_path: "pretrained_models/20260102_encoder_only.ckpt"
+# Training checkpoint with the encoder and the duration model (checkpoints/best/jyutvoice_flowdp_epoch019.ckpt is the Cantonese-only best)
+checkpoint_path: "checkpoints_yue_en_flowdp/checkpoint_epoch=018.ckpt"
 
-# Base configuration (inherits audio processing params)
-base_config: "configs/base.yaml"
+# The config that builds that model: configs/synth_flowdp.yaml for a flow-matching duration predictor, configs/base.yaml for a regression one
+base_config: "configs/synth_flowdp.yaml"
 
-# Export settings
-export:
-  # Output directory for ONNX models
-  output_dir: "onnx_models"
+# ProsodyCFM weights (scripts/train_prosody_cfm.py); null exports without it (checkpoints/best/prosody_cfm_mix1.pt is the one for the Cantonese-only best)
+prosody_checkpoint: "/home/joseph/data_local/prosody/mix_en/prosody_cfm_best.pt"
 
-  # Text encoder export settings
-  text_encoder:
-    enabled: true
-    filename: "text_encoder.onnx"
-    opset_version: 17 # ONNX opset version
+output_dir: "onnx_models"
+opset_version: 17
 
-    # Dynamic axes for variable-length inputs
-    dynamic_axes:
-      x: { 0: "batch", 1: "seq_len" }
-      x_lengths: { 0: "batch" }
-      lang: { 0: "batch", 1: "seq_len" }
-      tone: { 0: "batch", 1: "seq_len" }
-      word_pos: { 0: "batch", 1: "seq_len" }
-      syllable_pos: { 0: "batch", 1: "seq_len" }
-      spk_embed: { 0: "batch" }
-      encoder_output: { 0: "batch", 1: "n_feats", 2: "seq_len" }
-      mu_x: { 0: "batch", 1: "n_feats", 2: "seq_len" }
-      x_mask: { 0: "batch", 1: "1", 2: "seq_len" }
+# Longest token sequence (blanks included) the text encoder graph accepts: its rotary position tables are baked into the graph up to this length (about 32 tokens
+# per second of speech; the training data stops at 30 s, about 950 tokens)
+max_tokens: 1024
 
-    # Example input shapes for tracing
-    example_inputs:
-      batch_size: 1
-      seq_len: 50
-      n_vocab: 97
-      spk_embed_dim: 192
+# Euler steps unrolled into the duration sampler and ProsodyCFM graphs (the models were chosen with 10)
+euler_steps: 10
 
-  # Duration predictor export settings
-  duration_predictor:
-    enabled: true
-    filename: "duration_predictor.onnx"
-    opset_version: 17
-
-    # Dynamic axes
-    dynamic_axes:
-      x: { 0: "batch", 1: "seq_len" }
-      x_mask: { 0: "batch", 1: "1", 2: "seq_len" }
-      lang: { 0: "batch", 1: "seq_len" }
-      tone: { 0: "batch", 1: "seq_len" }
-      word_pos: { 0: "batch", 1: "seq_len" }
-      syllable_pos: { 0: "batch", 1: "seq_len" }
-      spk_embed: { 0: "batch" }
-      output: { 0: "batch" }
-
-    # Example input shapes
-    example_inputs:
-      batch_size: 1
-      seq_len: 50
-      n_vocab: 97
-      spk_embed_dim: 192
-
-  # Speech Length Predictor (SLP) export settings
-  slp:
-    enabled: true
-    filename: "slp.onnx"
-    opset_version: 17
-
-    # Dynamic axes
-    dynamic_axes:
-      x: { 0: "batch", 1: "seq_len" }
-      x_mask: { 0: "batch", 1: "1", 2: "seq_len" }
-      lang: { 0: "batch", 1: "seq_len" }
-      tone: { 0: "batch", 1: "seq_len" }
-      word_pos: { 0: "batch", 1: "seq_len" }
-      syllable_pos: { 0: "batch", 1: "seq_len" }
-      spk_embed: { 0: "batch" }
-      output: { 0: "batch" }
-
-# Optimization settings
-optimization:
-  # Graph optimization level
-  optimize_for_inference: true
-
-  # Enable constant folding
-  constant_folding: true
-
-  # Convert model to FP16 (if supported)
-  use_fp16: true
-
-  # Quantization settings (optional)
-  quantize:
-    enabled: false
-    type: "dynamic" # "dynamic" or "static"
-
-# Validation settings
-validation:
-  # Run inference test after export
-  test_inference: true
-
-  # Number of test samples
-  num_test_samples: 3
-
-  # Tolerance for output comparison (PyTorch vs ONNX)
-  atol: 1e-4
-  rtol: 1e-3
+# Largest accepted |onnx - torch| over every output of every graph (identical noise)
+atol: 1.0e-3
