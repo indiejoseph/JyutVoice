@@ -17,20 +17,24 @@ LANGUAGE_CODES = {
 }
 
 
-def text_to_sequence(text, lang: str, phone=None):
+def text_to_sequence(text, lang: str, phone=None, return_word2ph: bool = False):
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
     Args:
       text: string to convert to a sequence
       lang: language of the text ('yue', 'zh', 'en')
       phone: optional phoneme input
+      return_word2ph: also return g2p's `word2ph` (phones per text unit, pads included) as a sixth value
     Returns:
       List of integers corresponding to the symbols in the text
     """
 
-    _, phones, tones, word_pos, syllable_pos, lang_ids = clean_text(
-        text, lang=lang, phoneme=phone, padding=True
+    _, phones, tones, word_pos, syllable_pos, lang_ids, word2ph = clean_text(
+        text, lang=lang, phoneme=phone, padding=True, return_word2ph=True
     )
     phone_token_ids = cleaned_text_to_sequence(phones)
+
+    if return_word2ph:
+        return phone_token_ids, tones, word_pos, syllable_pos, lang_ids, word2ph
 
     return phone_token_ids, tones, word_pos, syllable_pos, lang_ids
 

@@ -8,6 +8,7 @@ from jyutvoice.text.symbols import punctuations
 from builtins import str as unicode
 from jyutvoice.text.english.symbols import symbols
 from jyutvoice.text.english.normalization import normalize
+from jyutvoice.text.english.stress import arpa_tone, initial_stress, is_name_like
 
 from nltk.tokenize import TweetTokenizer
 
@@ -125,13 +126,8 @@ def post_replace_ph(ph):
 
 
 def refine_ph(phn):
-    tone = 0
-    if re.search(r"\d$", phn):
-        tone = int(phn[-1]) + 1
-        phn = phn[:-1]
-    else:
-        tone = 3
-    return phn.lower(), tone
+    """ARPAbet phone -> (phone, tone id); the ids are English-only (stress.py), not the Cantonese tones 1-6."""
+    return arpa_tone(phn)
 
 
 def read_dict():
@@ -314,6 +310,12 @@ class en_G2p(G2p):
             # 还原 g2p_en 小写操作逻辑
             word = o_word.lower()
 
+            # an all-caps token the dictionary does not know (DSPGAN, AI) is read letter by letter, as one word per letter
+            if len(o_word) > 1 and o_word.isalpha() and o_word.isupper() and word not in self.cmu:
+                for letter in o_word:
+                    word_prons.append((letter, ["EY1"] if letter == "A" else self.cmu[letter.lower()][0]))
+                continue
+
             if re.search("[a-z]", word) is None:
                 pron = [word]
             # 先把单字母推出去
@@ -336,6 +338,10 @@ class en_G2p(G2p):
             else:
                 # 递归查找预测
                 pron = self.qryword(o_word)
+                # a name the dictionaries do not know (Google, WhatsApp): the guess of its stress is unreliable, names are stressed on the first syllable
+                known = word in self.cmu or (o_word.istitle() and word in self.namedict)
+                if not known and len(word) > 3 and is_name_like(o_word):
+                    pron = initial_stress(pron)
 
             word_prons.append((o_word, pron))
 

@@ -4,6 +4,7 @@ from typing import Optional
 import pycantonese
 import ToJyutping
 from jyutvoice.text.symbols import punctuations
+from jyutvoice.text.cantonese import colloquial
 
 
 def word2jyutping(word):
@@ -111,6 +112,8 @@ def g2p(
 
     if jyutping is None:
         word_jyutping = [(word, get_jyutping(word)) for word in words]
+        if colloquial.COLLOQUIAL_READINGS:  # colloquial readings on top of ToJyutping's defaults (see colloquial.py)
+            word_jyutping = list(zip(words, colloquial.apply(words, [j for _, j in word_jyutping])))
     elif isinstance(jyutping, str):
         jyutping_list = jyutping.split(" ")
 

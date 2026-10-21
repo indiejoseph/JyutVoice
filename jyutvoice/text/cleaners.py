@@ -1,8 +1,11 @@
 import re
+from functools import partial
 from jyutvoice.text.mandarin.g2p import g2p as mandarin_g2p
 from jyutvoice.text.cantonese.g2p import g2p as cantonese_g2p
 from jyutvoice.text.english.g2p import g2p as english_g2p
+from jyutvoice.text.english.normalization import normalize as english_normalize
 from jyutvoice.text.multilingual import g2p as multilingual_g2p
+from jyutvoice.text.script_split import drop_chinese_context_numbers, has_latin, split_latin
 from jyutvoice.text.symbols import punctuations
 
 rep_map = {
@@ -88,30 +91,69 @@ def replace_punctuation(text: str, lang="yue") -> str:
     return replaced_text
 
 
-def text_normalize(text: str, lang="yue") -> str:
+def normalize_latin_aware(text: str, lang: str) -> str:
+    """Normalise a text with English in it. The Latin words and numbers are spelled out the English way (digits, $, % ... become words) BEFORE the cleaner
+    strips them; the rest (Chinese, marks) goes through replace_punctuation as usual. For Chinese + English text the pieces of a word become separate words,
+    so `order咗` is `order 咗`; for English text they are joined as they were (`$999.` is `nine hundred ninety-nine dollars.`: the English g2p drops a mark
+    that follows a space)."""
+    zh_lang = "en" if lang == "en" else ("zh" if lang == "zh" else "yue")
+    out = []
+    for word in text.split():
+        for piece, kind in split_latin(word):
+            if kind == "latin":
+                piece = english_normalize(piece).strip()
+            elif kind == "other":
+                piece = replace_punctuation(piece, lang=zh_lang)
+            else:  # a number that touches a Chinese character: dropped, as in plain Chinese text
+                piece = ""
+            if piece:
+                out.append(piece)
+    return ("" if lang == "en" else " ").join(out)
+
+
+def is_code_mixed(text: str, lang: str) -> bool:
+    """True when `clean_text` takes the code-mixed path: lang "multilingual", or Chinese ("yue"/"zh") text that has English words. Chinese text without
+    Latin letters keeps the plain Cantonese / Mandarin path, unchanged."""
+    return lang == "multilingual" or (lang in ("yue", "zh") and has_latin(text))
+
+
+def text_normalize(text: str, lang="yue", mixed=None) -> str:
+    """`mixed`: whether the sentence this text belongs to is code-mixed (clean_text decides it once for the whole sentence, so a bare number between
+    English words is read in English); default: decide from this text alone."""
     text = text.strip()
+    if mixed is None:
+        mixed = is_code_mixed(text, lang)
+    if lang == "en" or mixed:
+        return normalize_latin_aware(text, lang)
     text = replace_punctuation(text, lang=lang)
     return text
 
 
-def clean_text(text: str, lang: str = "yue", phoneme=None, padding=True):
-    norm_text = " ".join([text_normalize(w, lang=lang) for w in text.split()])
+def clean_text(text: str, lang: str = "yue", phoneme=None, padding=True, return_word2ph: bool = False):
+    mixed = is_code_mixed(text, lang)
+    words = text.split()
+    if mixed and lang != "en":
+        words = drop_chinese_context_numbers(words)
+    norm_text = " ".join([text_normalize(w, lang=lang, mixed=mixed) for w in words])
     g2p = None
 
-    if lang == "yue":
+    if mixed:  # Chinese + English: the Chinese part is Cantonese unless lang is "zh"
+        g2p = partial(multilingual_g2p, lang="zh" if lang == "zh" else "yue")
+    elif lang == "yue":
         g2p = cantonese_g2p
     elif lang == "zh":
         g2p = mandarin_g2p
     elif lang == "en":
         g2p = english_g2p
-    elif lang == "multilingual":
-        g2p = multilingual_g2p
     else:
         raise ValueError(f"Language {lang} not supported for text cleaning.")
 
     phones, tones, word2ph, word_pos, syllable_pos, lang_ids = g2p(
         norm_text, phoneme, padding=padding
     )
+
+    if return_word2ph:  # phones per text unit, for jyutvoice.text.bert_align
+        return norm_text, phones, tones, word_pos, syllable_pos, lang_ids, word2ph
 
     return norm_text, phones, tones, word_pos, syllable_pos, lang_ids
 

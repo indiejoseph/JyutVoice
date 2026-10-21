@@ -271,8 +271,7 @@ def normalize(text):
     text = re.sub("[^ A-Za-z'.,?!\-]", "", text)
     text = re.sub(r"(?i)i\.e\.", "that is", text)
     text = re.sub(r"(?i)e\.g\.", "for example", text)
-    # 增加纯大写单词拆分
-    text = re.sub(r"(?<!^)(?<![\s])([A-Z])", r" \1", text)
+    # spelling out acronyms (OK, DSPGAN) happens in en_G2p.__call__, after the dictionary lookup: splitting here broke iPhone / YouTube / OK
     return text
 
 
