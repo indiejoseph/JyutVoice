@@ -10,3 +10,10 @@ jyutping-tts
 checkpoints
 onnx_models
 checkpoints_*
+
+# model weights, wherever they are saved
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
