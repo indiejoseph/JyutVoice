@@ -1,5 +1,9 @@
+import glob
+import io
+import json
 import os
 import random
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional
 import torchaudio.compliance.kaldi as kaldi
@@ -10,10 +14,38 @@ import whisper
 from lightning import LightningDataModule
 from torch.utils.data.dataloader import DataLoader
 import onnxruntime
-from datasets import load_dataset, load_from_disk
+import soundfile as sf
+from datasets import Audio, concatenate_datasets, load_dataset, load_from_disk
 from jyutvoice.utils.audio import mel_spectrogram
 from jyutvoice.utils.utils import intersperse
-from jyutvoice.text import text_to_sequence
+from jyutvoice.text import _symbol_to_id, text_to_sequence
+from jyutvoice.text.symbols import punctuations
+from jyutvoice.data.bert_sidefile import BertSideFile
+from jyutvoice.text.bert_align import expand_for_sequence
+
+
+PUNCT_IDS = torch.tensor(sorted({_symbol_to_id[p] for p in punctuations if p in _symbol_to_id}), dtype=torch.long)
+
+
+def column_values(ds, name):
+    """A column of a datasets.Dataset as a python list, read from the arrow table (honouring a previous select / filter), not through `ds[name]`."""
+    col = ds.data.column(name)
+    if ds._indices is not None:
+        col = col.take(ds._indices.column(0))
+    return col.to_pylist()
+
+
+def read_audio(cell):
+    """(float32 mono array, sampling rate, path or None) from an `audio` cell in any of its forms: encoded bytes (`Audio(decode=False)`, what
+    `setup()` casts to), a decoded dict {"array", "sampling_rate"} (datasets < 4) or datasets >= 4's torchcodec AudioDecoder."""
+    if isinstance(cell, dict) and cell.get("array") is not None:
+        return np.asarray(cell["array"], dtype=np.float32), cell["sampling_rate"], cell.get("path")
+    if isinstance(cell, dict):
+        source = io.BytesIO(cell["bytes"]) if cell.get("bytes") is not None else cell["path"]
+        y, sr = sf.read(source, dtype="float32")
+        return (y.mean(axis=1) if y.ndim > 1 else y), sr, cell.get("path")
+    samples = cell.get_all_samples()  # torchcodec AudioDecoder
+    return samples.data.float().mean(dim=0).numpy(), samples.sample_rate, None
 
 
 # random slice mel for reference encoder to prevent overfitting
@@ -47,12 +79,27 @@ class TextMelDataModule(LightningDataModule):
         load_durations,
         max_duration=None,
         max_text_length=None,
+        bert_dim=0,
+        bert_dir=None,
+        phone_override=None,
+        teacher_prior_weight=1.0,
+        dur_weight_counts=None,
+        dur_weight_min_count=0,
     ):
         super().__init__()
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=False)
+
+    @staticmethod
+    def load_one(path: str):
+        shards = sorted(glob.glob(path)) if any(c in path for c in "*?[") else []
+        if shards:  # e.g. `<dir>/shards/shard_*`: datasets written one directory per shard
+            return concatenate_datasets([load_from_disk(p) for p in shards])
+        if os.path.exists(path):
+            return load_from_disk(path)
+        return load_dataset(path, split="train")
 
     def setup(self, stage: Optional[str] = None):  # pylint: disable=unused-argument
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -61,17 +108,30 @@ class TextMelDataModule(LightningDataModule):
         careful not to execute things like random split twice!
         """
         # load and split datasets only if not loaded already
-        if os.path.exists(self.hparams.dataset_path):
-            ds = load_from_disk(self.hparams.dataset_path)
-        else:
-            ds = load_dataset(self.hparams.dataset_path, split="train")
+        paths = self.hparams.dataset_path
+        paths = [str(paths)] if isinstance(paths, (str, os.PathLike)) else [str(p) for p in paths]  # one dataset, or a list of them to mix
+        parts = [self.load_one(p) for p in paths]
+        if len(parts) > 1:  # sets built by different scripts have different extra columns (`source`, `duration`, `bert`): mix them on the common ones
+            common = [c for c in parts[0].column_names if all(c in q.column_names for q in parts[1:])]
+            parts = [q.select_columns(common) for q in parts]
+        ds = concatenate_datasets(parts) if len(parts) > 1 else parts[0]
 
-        if self.hparams.max_duration is not None:
+        if "audio" in ds.column_names:  # teacher rows have none
+            ds = ds.cast_column("audio", Audio(decode=False))  # decoded here with soundfile: independent of the datasets version
+
+        # Filters read the cheap columns from the underlying arrow table (`column_values`): `ds["text"]` goes through the python formatter and took
+        # over ten minutes on 162 shards that also hold audio and decoder_h (this: seconds). They end in one `select`, not ds.filter, because every DDP
+        # rank runs this and filter() writes cache files.
+        if self.hparams.max_duration is not None and "duration" not in ds.column_names:  # no duration column: read the audio headers
 
             def filter_fn(batch):
-                durations = [
-                    len(a["array"]) / a["sampling_rate"] for a in batch["audio"]
-                ]
+                durations = []
+                for cell in batch["audio"]:
+                    if isinstance(cell, dict) and cell.get("bytes") is not None:
+                        durations.append(sf.info(io.BytesIO(cell["bytes"])).duration)  # header only, no decoding
+                    else:
+                        y, sr, _ = read_audio(cell)
+                        durations.append(len(y) / sr)
                 return [d <= self.hparams.max_duration for d in durations]
 
             ds = ds.filter(
@@ -82,23 +142,27 @@ class TextMelDataModule(LightningDataModule):
                 ),
             )
 
+        keep = np.ones(len(ds), dtype=bool)
+        if self.hparams.max_duration is not None and "duration" in ds.column_names:
+            keep &= np.asarray(column_values(ds, "duration")) <= self.hparams.max_duration
         if self.hparams.max_text_length is not None:
+            keep &= np.fromiter((len(t) <= self.hparams.max_text_length for t in column_values(ds, "text")), dtype=bool, count=len(ds))
+        if self.hparams.bert_dir:  # rows whose label cannot be aligned with the text (g2p would fail on them)
+            bad = BertSideFile(self.hparams.bert_dir).bad_ids
+            if bad:
+                keep &= np.fromiter((x not in bad for x in column_values(ds, "id")), dtype=bool, count=len(ds))
+        if not keep.all():
+            ds = ds.select(np.flatnonzero(keep).tolist())
 
-            def filter_text_fn(batch):
-                text_lengths = [
-                    len(t) if isinstance(t, str) else len(t) for t in batch["text"]
-                ]
-                return [tl <= self.hparams.max_text_length for tl in text_lengths]
-
-            ds = ds.filter(
-                filter_text_fn,
-                batched=True,
-                num_proc=(
-                    self.hparams.num_workers if self.hparams.num_workers > 0 else 1
-                ),
+        if self.hparams.bert_dim > 0 and "bert" not in ds.column_names and not self.hparams.bert_dir:
+            warnings.warn(
+                f"bert_dim={self.hparams.bert_dim} but the dataset at {self.hparams.dataset_path} has no `bert` column: every BERT input "
+                "will be zeros and the BERT projection can learn nothing"
             )
 
-        ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio)
+        # a fixed seed: every DDP rank calls setup() itself and must get the same split (an unseeded split gives each rank a different
+        # train / validation partition, so validation rows leak into other ranks' training data)
+        ds = ds.train_test_split(test_size=self.hparams.dataset_valid_ratio, seed=self.hparams.seed)
 
         self.trainset = (
             TextMelDataset(  # pylint: disable=attribute-defined-outside-init
@@ -114,6 +178,12 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
+                self.hparams.bert_dim,
+                self.hparams.bert_dir,
+                self.hparams.phone_override,
+                self.hparams.teacher_prior_weight,
+                self.hparams.dur_weight_counts,
+                self.hparams.dur_weight_min_count,
             )
         )
         self.validset = (
@@ -130,6 +200,12 @@ class TextMelDataModule(LightningDataModule):
                 self.hparams.seed,
                 self.hparams.load_durations,
                 "tmp",
+                self.hparams.bert_dim,
+                self.hparams.bert_dir,
+                self.hparams.phone_override,
+                self.hparams.teacher_prior_weight,
+                self.hparams.dur_weight_counts,
+                self.hparams.dur_weight_min_count,
             )
         )
 
@@ -185,8 +261,22 @@ class TextMelDataset(torch.utils.data.Dataset):
         seed=None,
         load_durations=False,
         tmp_dir="tmp",
+        bert_dim=0,
+        bert_dir=None,
+        phone_override=None,
+        teacher_prior_weight=1.0,
+        dur_weight_counts=None,
+        dur_weight_min_count=0,
     ):
         self.dataset = dataset
+        # {character: how often the teacher saw it in training}; with `dur_weight_min_count` > 0 the tokens of characters seen less often get weight 0 in the
+        # duration loss (the teacher reads them badly, so its timing there is not a target): see get_dur_weight
+        self.char_counts = json.load(open(dur_weight_counts, encoding="utf-8")) if dur_weight_counts and dur_weight_min_count > 0 else None
+        self.dur_weight_min_count = dur_weight_min_count
+        self.teacher_prior_weight = teacher_prior_weight  # weight in the prior loss of rows whose `source` is "teacher" (they have no real audio)
+        self.phone_override = json.load(open(phone_override, encoding="utf-8")) if phone_override else {}  # {row id: phone string}
+        self.bert_dim = bert_dim
+        self.bert_side = BertSideFile(bert_dir) if bert_dir else None
         self.add_blank = add_blank
         self.n_fft = n_fft
         self.n_mels = n_mels
@@ -206,14 +296,10 @@ class TextMelDataset(torch.utils.data.Dataset):
     def get_datapoint(self, row):
         text = row["text"]
         lang = row["lang"]
-        phone = row["phone"]
-        audio = row["audio"]["array"]
-        audio_path = (
-            row["audio"]["path"]
-            if row["audio"]["path"] is not None
-            else str(abs(hash(text))) + ".wav"
-        )
-        sr = row["audio"]["sampling_rate"]
+        phone = self.phone_override.get(row.get("id"), row["phone"])  # corrected labels win over the dataset's own
+        has_audio = row.get("audio") is not None  # teacher rows (text + synthetic flow-encoder states) carry no audio
+        audio, sr, path = read_audio(row["audio"]) if has_audio else (None, None, None)
+        audio_path = path if path is not None else str(row.get("id") or abs(hash(text))) + ".wav"
 
         # Check if lang/phone/tones are already pre-processed as integers (from dataset)
         # vs strings (need to be processed)
@@ -224,6 +310,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             tone = torch.LongTensor(row.get("tones", []))
             word_pos = torch.LongTensor(row.get("word_pos", []))
             syllable_pos = torch.LongTensor(row.get("syllable_pos", []))
+            word2ph = row.get("word2ph")  # only needed for BERT features
         else:
             # Need to process text
             text_result = self.get_text(
@@ -237,20 +324,23 @@ class TextMelDataset(torch.utils.data.Dataset):
             if text_result is None:
                 return None
 
-            text, lang_ids, phone_ids, tone, word_pos, syllable_pos = text_result
+            text, lang_ids, phone_ids, tone, word_pos, syllable_pos, word2ph = text_result
 
-        if audio is None:
-            raise ValueError(f"Audio data is None for {audio_path}")
+        if has_audio:
+            if audio is None:
+                raise ValueError(f"Audio data is None for {audio_path}")
 
-        # Handle both list and numpy array formats from HuggingFace datasets
-        if isinstance(audio, list):
-            audio = np.array(audio, dtype=np.float32)
+            # Handle both list and numpy array formats from HuggingFace datasets
+            if isinstance(audio, list):
+                audio = np.array(audio, dtype=np.float32)
+            else:
+                audio = np.array(audio, dtype=np.float32)
+            # Resample audio for mel-spectrogram generation (CosyVoice2 uses 24kHz)
+            if sr != self.sample_rate:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
+            mel = self.get_mel(audio, self.sample_rate)
         else:
-            audio = np.array(audio, dtype=np.float32)
-        # Resample audio for mel-spectrogram generation (CosyVoice2 uses 24kHz)
-        if sr != self.sample_rate:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
-        mel = self.get_mel(audio, self.sample_rate)
+            mel = None  # filled in below once the flow-encoder states give the length
 
         # Load pre-computed speaker embedding from dataset, or provide default
         if "spk_emb" in row:
@@ -263,7 +353,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             # Provide default speaker embedding for testing
             spk_emb = torch.zeros(192, dtype=torch.float32)
 
-        durations = self.get_durations(audio, text) if self.load_durations else None
+        durations = self.get_durations(audio, text) if (self.load_durations and has_audio) else None
 
         # Load pre-computed decoder hidden state from dataset, or provide default
         if "decoder_h" in row:
@@ -278,6 +368,18 @@ class TextMelDataset(torch.utils.data.Dataset):
             mel_time_steps = mel.shape[1]
             decoder_h = torch.zeros(mel_time_steps, self.n_mels, dtype=torch.float32)
 
+        if mel is None:  # no audio: the mel is only used for its shape by the encoder-only training (no decoder), so a zero one of the right length does
+            mel = torch.zeros(self.n_mels, decoder_h.shape[0], dtype=torch.float32)
+
+        bert = self.get_bert(row, word2ph, phone_ids.shape[-1]) if self.bert_dim > 0 else None
+        silence = pause_mask = None
+        if row.get("silence") is not None:  # per-frame silence flags (teacher rows): the alignment may give those frames to the pause tokens
+            silence = torch.as_tensor(np.asarray(row["silence"]), dtype=torch.float32)
+            assert silence.shape[0] == decoder_h.shape[0], (row.get("id"), silence.shape, decoder_h.shape)
+            pause_mask = self.get_pause_mask(phone_ids)
+        prior_weight = self.teacher_prior_weight if row.get("source") == "teacher" else 1.0
+        dur_weight = self.get_dur_weight(text, lang, word2ph, phone_ids.shape[-1]) if getattr(self, "char_counts", None) is not None else None
+
         return {
             "x": phone_ids,
             "y": mel,
@@ -290,7 +392,69 @@ class TextMelDataset(torch.utils.data.Dataset):
             "syllable_pos": syllable_pos,
             "spk_emb": spk_emb,
             "decoder_h": decoder_h,
+            "bert": bert,
+            "prior_weight": prior_weight,
+            "silence": silence,
+            "pause_mask": pause_mask,
+            "dur_weight": dur_weight,
         }
+
+    def get_dur_weight(self, text, lang, word2ph, n_tokens):
+        """(n_tokens,) float duration-loss weight per token: 0 for the phones of characters that occur fewer than `dur_weight_min_count` times in
+        `char_counts` and for the blanks next to such a phone, 1 elsewhere (pads and punctuation included). All ones when the text units cannot be matched
+        to `word2ph`, the row is not Cantonese or it is code-mixed (English words have one `word2ph` entry per word, not per character)."""
+        weights = np.ones(n_tokens, dtype=np.float32)
+        from jyutvoice.text.script_split import has_latin
+
+        if lang != "yue" or word2ph is None or has_latin(text):
+            return torch.from_numpy(weights)
+        from jyutvoice.text.bert_align import unit_chars
+        from jyutvoice.text.cantonese.readings import cleaned
+        from jyutvoice.text.symbols import punctuations
+
+        chars = unit_chars(cleaned(text))
+        if len(chars) != len(word2ph) - 2:  # word2ph carries the two pads
+            return torch.from_numpy(weights)
+        n_phones = sum(word2ph)
+        phone_w = np.ones(n_phones, dtype=np.float32)
+        pos = word2ph[0]
+        for c, n in zip(chars, word2ph[1:-1]):
+            if c not in punctuations and self.char_counts.get(c, 0) < self.dur_weight_min_count:  # punctuation is never masked: those are the pause tokens
+                phone_w[pos : pos + n] = 0.0
+            pos += n
+        if self.add_blank:
+            if n_tokens != 2 * n_phones + 1:
+                return torch.from_numpy(weights)
+            weights[1::2] = phone_w
+            weights[2:-1:2] = np.minimum(phone_w[:-1], phone_w[1:])  # a blank between two phones: both must be trusted
+        else:
+            if n_tokens != n_phones:
+                return torch.from_numpy(weights)
+            weights[:] = phone_w
+        return torch.from_numpy(weights)
+
+    def get_pause_mask(self, phone_ids):
+        """(T_text,) bool: the tokens that may take silent frames: punctuation marks, and the pad tokens at both ends (leading / trailing silence)
+        with the blanks around them."""
+        ids = torch.as_tensor(phone_ids, dtype=torch.long).view(-1)
+        mask = torch.isin(ids, PUNCT_IDS.to(ids.device))
+        edge = 3 if self.add_blank else 1
+        mask[:edge] = True
+        mask[-edge:] = True
+        return mask
+
+    def get_bert(self, row, word2ph, n_positions):
+        """(n_positions, bert_dim) BERT features on the phone positions: the row's per-character `bert` column (n_chars + 2 rows, the two
+        pads included) repeated `word2ph` times, with blanks if the phones have them. Zeros when the row has no features."""
+        unit = row.get("bert")
+        if unit is None and getattr(self, "bert_side", None) is not None:
+            unit = self.bert_side.get(row.get("id"))  # features kept next to the dataset, looked up by row id
+        if unit is None or word2ph is None:
+            return torch.zeros(n_positions, self.bert_dim)
+        unit = torch.as_tensor(np.asarray(unit, dtype=np.float32))
+        if unit.ndim != 2 or unit.shape[1] != self.bert_dim:
+            raise ValueError(f"`bert` has shape {tuple(unit.shape)}, expected (n_chars + 2, {self.bert_dim})")
+        return expand_for_sequence(unit, word2ph, n_positions)
 
     def get_durations(self, filepath, text):
         filepath = Path(filepath)
@@ -336,8 +500,8 @@ class TextMelDataset(torch.utils.data.Dataset):
         add_blank=False,
     ):
         try:
-            phone_ids, tone_ids, word_pos, syllable_pos, lang_ids = text_to_sequence(
-                text, lang, phone
+            phone_ids, tone_ids, word_pos, syllable_pos, lang_ids, word2ph = text_to_sequence(
+                text, lang, phone, return_word2ph=True
             )
 
             if add_blank:
@@ -352,7 +516,7 @@ class TextMelDataset(torch.utils.data.Dataset):
             word_pos = torch.LongTensor(word_pos)
             syllable_pos = torch.LongTensor(syllable_pos)
 
-            return text, lang_ids, phone_ids, tone, word_pos, syllable_pos
+            return text, lang_ids, phone_ids, tone, word_pos, syllable_pos, word2ph
         except Exception as e:
             raise ValueError(
                 f"Error processing text: {text} with phone: {phone}. Exception: {str(e)}"
@@ -410,6 +574,8 @@ class TextMelBatchCollate:
         durations = torch.zeros((B, x_max_length), dtype=torch.long)
         spk_embed = torch.zeros(B, 192, dtype=torch.float32)
         decoder_h = torch.zeros((B, y_max_length, decoder_h_dim), dtype=torch.float32)
+        bert_dim = batch[0]["bert"].shape[-1] if batch[0].get("bert") is not None else 0
+        bert = torch.zeros((B, x_max_length, bert_dim), dtype=torch.float32) if bert_dim else None
 
         y_lengths, x_lengths = [], []
         for i, item in enumerate(batch):
@@ -435,6 +601,8 @@ class TextMelBatchCollate:
             decoder_h[i, : decoder_h_.shape[0], : decoder_h_.shape[1]] = decoder_h_
             if item["durations"] is not None:
                 durations[i, : item["durations"].shape[-1]] = item["durations"]
+            if bert is not None:
+                bert[i, : item["bert"].shape[0]] = item["bert"]
 
         y_lengths = torch.tensor(y_lengths, dtype=torch.long)
         x_lengths = torch.tensor(x_lengths, dtype=torch.long)
@@ -452,5 +620,24 @@ class TextMelBatchCollate:
             "decoder_h": decoder_h,
             "durations": durations if not torch.eq(durations, 0).all() else None,
         }
+        if bert is not None:
+            batch_dict["bert"] = bert
+        if any(item.get("silence") is not None for item in batch):
+            silence = torch.zeros((B, y_max_length), dtype=torch.float32)
+            pause_mask = torch.zeros((B, x_max_length), dtype=torch.bool)
+            for i, item in enumerate(batch):
+                if item.get("silence") is not None:
+                    silence[i, : item["silence"].shape[0]] = item["silence"]
+                    pause_mask[i, : item["pause_mask"].shape[0]] = item["pause_mask"]
+            batch_dict["silence"], batch_dict["pause_mask"] = silence, pause_mask
+        if any(item.get("dur_weight") is not None for item in batch):
+            dur_weight = torch.ones((B, x_max_length), dtype=torch.float32)
+            for i, item in enumerate(batch):
+                if item.get("dur_weight") is not None:
+                    dur_weight[i, : item["dur_weight"].shape[0]] = item["dur_weight"]
+            batch_dict["dur_weight"] = dur_weight
+        weights = [item.get("prior_weight", 1.0) for item in batch]
+        if any(w != 1.0 for w in weights):  # only when some row is down-weighted: leaves every other batch exactly as before
+            batch_dict["prior_weight"] = torch.tensor(weights, dtype=torch.float32)
 
         return batch_dict
