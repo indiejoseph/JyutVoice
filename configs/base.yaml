@@ -18,8 +18,9 @@ hop_length: 480
 win_length: 1920
 n_fft: 1920
 f_min: 0
-f_max: null
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
 add_blank: true
+bert_dim: 0 # per-phone BERT feature width: 1024 for ModernCantoneseBert-large (dataset needs a `bert` column), 0 = off
 spk_embed_dim: 192
 lang_embed_dim: 32
 
@@ -64,7 +65,8 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
         prenet: true
     n_vocab: 97
     n_lang: 4 # Pad + Cantonese, Mandarin, English
-    n_tone: 7 # pad + 6 tones
+    n_tone: 11 # pad + 6 Cantonese tones + 4 English stress ids
+    bert_dim: !ref <bert_dim>
 
   dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
     in_channels: 192
@@ -124,8 +126,9 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
-  max_duration: 10.0
+  max_duration: 30.0 # CosyVoice2's speech tokenizer limit
   max_text_length: 500
+  bert_dim: !ref <bert_dim>
 
 trainer: !new:lightning.Trainer
   accelerator: auto
@@ -139,12 +142,16 @@ trainer: !new:lightning.Trainer
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
 
+# Weights-only warm start (optimizer and epoch start fresh; works after adding parameters such as the BERT projection):
+# init_ckpt: pretrained_models/20260102_encoder_only.ckpt
+# `ckpt_path: <file>` instead resumes everything, including the optimizer, and fails if the model gained parameters.
+
 callbacks:
   model_checkpoint:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     dirpath: checkpoints
     filename: checkpoint_{epoch:03d}
-    monitor: val_loss
+    monitor: loss/val_epoch
     verbose: False
     save_last: true
     save_top_k: 10

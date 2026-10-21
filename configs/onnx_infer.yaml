@@ -11,7 +11,7 @@ hop_length: 480
 win_length: 1920
 n_fft: 1920
 f_min: 0
-f_max: null
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
 n_feats: 80
 spk_embed_dim: 192
 

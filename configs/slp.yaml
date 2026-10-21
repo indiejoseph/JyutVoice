@@ -18,7 +18,7 @@ hop_length: 480
 win_length: 1920
 n_fft: 1920
 f_min: 0
-f_max: null
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
 add_blank: true
 spk_embed_dim: 192
 lang_embed_dim: 32
@@ -66,7 +66,15 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
     n_lang: 4 # Pad + Cantonese, Mandarin, English
     n_tone: 7 # pad + 6 tones
 
-  dp: !new:jyutvoice.models.slp.SpeechLengthPredictor
+  # per-token durations (weights `dp.*`, from the encoder-only checkpoint) ...
+  dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
+    in_channels: 192
+    filter_channels: !ref <filter_channels_dp>
+    kernel_size: 3
+    p_dropout: !ref <p_dropout>
+
+  # ... rescaled to the total length predicted here (weights `slp.*`, as saved by train_slp.py)
+  slp: !new:jyutvoice.models.slp.SpeechLengthPredictor
     n_vocab: 97
     n_lang: 4
     n_tone: 7
@@ -128,7 +136,7 @@ data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
   win_length: !ref <win_length>
   f_min: !ref <f_min>
   f_max: !ref <f_max>
-  max_duration: 10.0
+  max_duration: 30.0 # CosyVoice2's speech tokenizer limit
   max_text_length: 500
 
 trainer: !new:lightning.Trainer

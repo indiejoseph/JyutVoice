@@ -1,0 +1,173 @@
+# Flow-matching duration predictor (FlowDurationPredictor) for the ENGLISH-capable encoder (checkpoints_yue_en, see yue_en_encoder.yaml): the recipe of
+# teacher_flowdp.yaml (blanks kept, no BERT, frozen encoder, pause-aware alignment, only the encoder warm-started) on the Cantonese teacher rows PLUS the MCE code-mixed
+# recordings. The MCE rows carry a `silence` column (scripts/add_silence_column.py: the SilenceProbe of the teacher rows applied to their decoder_h): the datamodule
+# keeps only the columns common to every set, so without it the pause-aware alignment would be off for all rows. The old predictor was trained against the old
+# encoder's states and has to be redone.
+# VARIANT t2: the teacher rows are listed twice. The first run (yue_en_flowdp.yaml) speaks the 60 held-out Cantonese sentences 10% shorter than the teacher (median
+# ratio 0.903 vs 0.968 for the old predictor): the MCE read speech is faster and the predictor cannot tell the two apart. 14 epochs of the 1.5x larger mix.
+# fixed params
+n_feats: 80
+n_heads: 4
+p_dropout: 0.1
+filter_channels_dp: 256
+token_frame_rate: 25
+token_mel_ratio: 2
+# stream related params
+chunk_size: 25 # streaming inference chunk size, in token
+num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+kernel_size: 3
+hidden_channels: 256
+filter_channels: 1024
+
+# audio processing params
+sample_rate: 24000
+hop_length: 480
+win_length: 1920
+n_fft: 1920
+f_min: 0
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
+add_blank: true
+pause_bonus: 10.0 # MAS reward per silent frame given to a pause token (punctuation, edge pads); 0 = plain MAS. 10 sends ~94% of the silent runs there (scripts/diag_pause_alignment.py)
+bert_dim: 0 # per-phone BERT feature width: 1024 for ModernCantoneseBert-large (dataset needs a `bert` column), 0 = off
+spk_embed_dim: 192
+lang_embed_dim: 32
+
+hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
+  in_channels: 80
+  base_channels: 512
+  nb_harmonics: 8
+  sampling_rate: !ref <sample_rate>
+  nsf_alpha: 0.1
+  nsf_sigma: 0.003
+  nsf_voiced_threshold: 10
+  upsample_rates: [8, 5, 3]
+  upsample_kernel_sizes: [16, 11, 7]
+  istft_params:
+    n_fft: 16
+    hop_len: 4
+  resblock_kernel_sizes: [3, 7, 11]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  source_resblock_kernel_sizes: [7, 7, 11]
+  source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  lrelu_slope: 0.1
+  audio_limit: 0.99
+  f0_predictor: !new:jyutvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+    num_class: 1
+    in_channels: 80
+    cond_channels: 512
+
+tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
+  encoder: !new:jyutvoice.models.text_encoder.TextEncoder
+    encoder_type: RoPE Encoder
+    encoder_params: !new:omegaconf.DictConfig
+      content:
+        n_feats: !ref <n_feats>
+        n_channels: 192
+        filter_channels: 768
+        filter_channels_dp: !ref <filter_channels_dp>
+        n_heads: 2
+        n_layers: 6
+        kernel_size: 3
+        p_dropout: !ref <p_dropout>
+        gin_channels: !ref <spk_embed_dim>
+        prenet: true
+    n_vocab: 97
+    n_lang: 4 # Pad + Cantonese, Mandarin, English
+    n_tone: 11 # pad + 6 Cantonese tones + 4 English stress ids
+    bert_dim: !ref <bert_dim>
+
+  dp: !new:jyutvoice.models.flow_duration_predictor.FlowDurationPredictor
+    in_channels: 192
+    filter_channels: !ref <filter_channels_dp>
+    n_layers: 4
+    kernel_size: 5
+    p_dropout: !ref <p_dropout>
+    bert_dim: 0 # no sidecar
+    spk_embed_dim: !ref <spk_embed_dim>
+    cfg_dropout: 0.15
+    grad_scale: 0.1
+    infer_cfg_scale: 0.0 # plain conditional samples (guidance sharpens towards the extremes; compare with scripts/diag_duration_tokens.py --cfg-scale)
+    infer_temperature: 1.0
+
+  decoder: null
+  spk_embed_dim: !ref <spk_embed_dim>
+  freeze_encoder: true # only the duration predictor learns
+  pause_bonus: !ref <pause_bonus>
+  optimizer: !name:torch.optim.AdamW
+    lr: 3e-4
+    weight_decay: 0.0
+  scheduler: null
+  warmup_steps: 100 # Number of warmup steps for learning rate
+
+data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
+  name: jyutvoice_tts
+  dataset_path:  # mixed on their common columns
+    - /home/joseph/data_local/teacher/rows_main  # teacher rows (scripts/teacher_rows.py): text + flow-encoder states of the CosyVoice2 LLM's tokens, no audio
+    - /home/joseph/data_local/teacher/rows_main  # again: the teacher rows twice, so that the Cantonese pacing stays the teacher's (see the header)
+    - /home/joseph/data_local/mce_ds/shards_sil/shard_*  # code-mixed read speech with the silence column added
+  teacher_prior_weight: 0.0  # teacher rows only train the durations: their phones come from g2p, the teacher's own reading may differ
+  # speaker_embedding_model_path: pretrained_models/campplus.onnx
+  # flow_encoder_path: pretrained_models/flow_encoder.pt
+  # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
+  batch_size: 16
+  num_workers: 8
+  pin_memory: true
+  dataset_valid_ratio: 0.05
+  seed: 42
+  load_durations: false
+  add_blank: !ref <add_blank>
+  n_fft: !ref <n_fft>
+  n_feats: !ref <n_feats>
+  sample_rate: !ref <sample_rate>
+  hop_length: !ref <hop_length>
+  win_length: !ref <win_length>
+  f_min: !ref <f_min>
+  f_max: !ref <f_max>
+  max_duration: null # all Cantonese clips are short; null skips the (slow) duration scan
+  max_text_length: 500
+  bert_dim: !ref <bert_dim>
+
+trainer: !new:lightning.Trainer
+  accelerator: gpu
+  devices: 1  # the local RTX 3090
+  precision: bf16-mixed
+  max_epochs: 14
+  detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0 # have to be 0 for testing
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+
+# Weights-only warm start (optimizer and epoch start fresh; works after adding parameters such as the BERT projection):
+init_ckpt: checkpoints_yue_en/checkpoint_epoch=014.ckpt
+init_ckpt_prefixes: [encoder., spk_embed_affine_layer.]
+# `ckpt_path: <file>` instead resumes everything, including the optimizer, and fails if the model gained parameters.
+
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: checkpoints_yue_en_flowdp_t2
+    filename: checkpoint_{epoch:03d}
+    monitor: loss/val_epoch
+    verbose: False
+    save_last: true
+    save_top_k: 3
+    mode: "min"
+    auto_insert_metric_name: True
+    save_weights_only: False
+    every_n_epochs: 1
+    save_on_train_epoch_end: null
+
+# Checkpoint Configuration
+
+# WandB Logging Configuration
+logger:
+  # wandb:
+  #   _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  #   name: jyutvoice-tts # Project name
+  #   project: jyutvoice-tts # WandB project name
+  #   entity: null # Set to your WandB team name if you have one
+  #   log_model: false # Set to true to log model checkpoints
+  #   prefix: ""
+  #   notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"

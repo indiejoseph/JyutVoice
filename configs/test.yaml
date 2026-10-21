@@ -18,7 +18,7 @@ hop_length: 480
 win_length: 1920
 n_fft: 1920
 f_min: 0
-f_max: null
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
 add_blank: true
 spk_embed_dim: 192
 lang_embed_dim: 32
@@ -64,7 +64,7 @@ tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
         prenet: true
     n_vocab: 97
     n_lang: 4 # Pad + Cantonese, Mandarin, English
-    n_tone: 7 # pad + 6 tones
+    n_tone: 11 # pad + 6 Cantonese tones + 4 English stress ids
 
   dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
     in_channels: 192
@@ -141,7 +141,7 @@ callbacks:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint
     dirpath: checkpoints
     filename: checkpoint_{epoch:03d}
-    monitor: val_loss
+    monitor: loss/val_epoch
     verbose: False
     save_last: true
     save_top_k: 10

@@ -1,0 +1,159 @@
+# ABLATION of yue_encoder_nobert.yaml: identical except add_blank false (half as many encoder tokens). Same data, labels, warm start, lr, seed, split.
+# Validation duration loss is per token, so it is NOT comparable with the blank runs; compare total-length accuracy (scripts/diag_duration.py) instead.
+# BASELINE for yue_encoder.yaml: identical (same data, corrected labels, warm start, lr, epochs, seed) but without the BERT input (bert_dim 0, no side file).
+# Compare its validation loss with the BERT run's to see what the ModernCantoneseBert features add. Not launched until the BERT run has finished.
+# Fine-tune the encoder + duration predictor on the phoneme-labelled Cantonese corpus (not ASR text), warm-started from the earlier encoder-only
+# checkpoint, with ModernCantoneseBert-large features from a side file. Same as encoder_only.yaml except the settings marked below.
+# fixed params
+n_feats: 80
+n_heads: 4
+p_dropout: 0.1
+filter_channels_dp: 256
+token_frame_rate: 25
+token_mel_ratio: 2
+# stream related params
+chunk_size: 25 # streaming inference chunk size, in token
+num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+kernel_size: 3
+hidden_channels: 256
+filter_channels: 1024
+
+# audio processing params
+sample_rate: 24000
+hop_length: 480
+win_length: 1920
+n_fft: 1920
+f_min: 0
+f_max: 8000  # CosyVoice2 flow mel (feat_extractor fmax: 8000); null (12 kHz) shifts pitch by about -2 semitones
+add_blank: false # no interspersed blank tokens: at 50 Hz every blank costs >= 1 frame (20 ms) and absorbed as much time as the phones
+bert_dim: 0 # per-phone BERT feature width: 1024 for ModernCantoneseBert-large (dataset needs a `bert` column), 0 = off
+spk_embed_dim: 192
+lang_embed_dim: 32
+
+hift: !new:jyutvoice.hifigan.generator.HiFTGenerator
+  in_channels: 80
+  base_channels: 512
+  nb_harmonics: 8
+  sampling_rate: !ref <sample_rate>
+  nsf_alpha: 0.1
+  nsf_sigma: 0.003
+  nsf_voiced_threshold: 10
+  upsample_rates: [8, 5, 3]
+  upsample_kernel_sizes: [16, 11, 7]
+  istft_params:
+    n_fft: 16
+    hop_len: 4
+  resblock_kernel_sizes: [3, 7, 11]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  source_resblock_kernel_sizes: [7, 7, 11]
+  source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  lrelu_slope: 0.1
+  audio_limit: 0.99
+  f0_predictor: !new:jyutvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+    num_class: 1
+    in_channels: 80
+    cond_channels: 512
+
+tts: !new:jyutvoice.models.jyutvoice_tts.JyutVoiceTTS
+  encoder: !new:jyutvoice.models.text_encoder.TextEncoder
+    encoder_type: RoPE Encoder
+    encoder_params: !new:omegaconf.DictConfig
+      content:
+        n_feats: !ref <n_feats>
+        n_channels: 192
+        filter_channels: 768
+        filter_channels_dp: !ref <filter_channels_dp>
+        n_heads: 2
+        n_layers: 6
+        kernel_size: 3
+        p_dropout: !ref <p_dropout>
+        gin_channels: !ref <spk_embed_dim>
+        prenet: true
+    n_vocab: 97
+    n_lang: 4 # Pad + Cantonese, Mandarin, English
+    n_tone: 11 # pad + 6 Cantonese tones + 4 English stress ids
+    bert_dim: !ref <bert_dim>
+
+  dp: !new:jyutvoice.models.duration_predictor.DurationPredictor
+    in_channels: 192
+    filter_channels: !ref <filter_channels_dp>
+    kernel_size: 3
+    p_dropout: !ref <p_dropout>
+
+  decoder: null
+  spk_embed_dim: !ref <spk_embed_dim>
+  optimizer: !name:torch.optim.AdamW
+    lr: 2e-4  # fine-tuning: lower than the 5e-4 of encoder_only.yaml
+    weight_decay: 0.0
+  scheduler: null
+  warmup_steps: 500 # Number of warmup steps for learning rate
+
+data: !new:jyutvoice.data.text_mel_datamodule.TextMelDataModule
+  name: jyutvoice_tts
+  dataset_path: /home/joseph/jyutvoice_data/dataset_yue  # Cantonese shards 116-277 of genkai's dataset_processed (tts corpus, `phone` = jyutping label)
+  phone_override: /home/joseph/jyutvoice_data/phone_override.json  # corrected labels (scripts/make_phone_override.py), by row id
+  # speaker_embedding_model_path: pretrained_models/campplus.onnx
+  # flow_encoder_path: pretrained_models/flow_encoder.pt
+  # speech_tokenizer_path: pretrained_models/speech_tokenizer_v2.onnx
+  batch_size: 16
+  num_workers: 8
+  pin_memory: true
+  dataset_valid_ratio: 0.001
+  seed: 42
+  load_durations: false
+  add_blank: !ref <add_blank>
+  n_fft: !ref <n_fft>
+  n_feats: !ref <n_feats>
+  sample_rate: !ref <sample_rate>
+  hop_length: !ref <hop_length>
+  win_length: !ref <win_length>
+  f_min: !ref <f_min>
+  f_max: !ref <f_max>
+  max_duration: null # all Cantonese clips are short; null skips the (slow) duration scan
+  max_text_length: 500
+  bert_dim: !ref <bert_dim>
+
+trainer: !new:lightning.Trainer
+  accelerator: gpu
+  devices: 4  # winrex GPUs 0-3 (CUDA_VISIBLE_DEVICES=0,1,2,3); global batch 4 x 16 = 64
+  strategy: ddp_find_unused_parameters_true  # spk_embed_affine_layer is unused while decoder is null
+  precision: bf16-mixed
+  max_epochs: 10
+  detect_anomaly: false # raise exception if NaN or +/-inf is detected in any tensor (disable for performance)
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0 # have to be 0 for testing
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+
+# Weights-only warm start (optimizer and epoch start fresh; works after adding parameters such as the BERT projection):
+init_ckpt: pretrained_models/20260102_encoder_only.ckpt
+# `ckpt_path: <file>` instead resumes everything, including the optimizer, and fails if the model gained parameters.
+
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: checkpoints_yue_noblank
+    filename: checkpoint_{epoch:03d}
+    monitor: loss/val_epoch
+    verbose: False
+    save_last: true
+    save_top_k: 10
+    mode: "min"
+    auto_insert_metric_name: True
+    save_weights_only: False
+    every_n_epochs: 1
+    save_on_train_epoch_end: null
+
+# Checkpoint Configuration
+
+# WandB Logging Configuration
+logger:
+  # wandb:
+  #   _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  #   name: jyutvoice-tts # Project name
+  #   project: jyutvoice-tts # WandB project name
+  #   entity: null # Set to your WandB team name if you have one
+  #   log_model: false # Set to true to log model checkpoints
+  #   prefix: ""
+  #   notes: "JyutVoice TTS with CosyVoice2 frozen decoder transfer learning"
